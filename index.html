@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Corretor de Gabaritos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="top-row">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i class="f"></i><i></i></span>Corretor de Gabaritos</div>
+      <div class="prova-pick">
+        <label class="sr-only" for="prova-sel">Prova</label>
+        <select id="prova-sel"></select>
+        <button class="btn small" id="nova">Nova prova</button>
+        <button class="btn small danger" id="excluir">Excluir</button>
+      </div>
+    </div>
+    <nav class="steps" role="tablist" aria-label="Etapas">
+      <button role="tab" data-aba="turmas"><span class="n">1</span>Turmas</button>
+      <button role="tab" data-aba="gabarito"><span class="n">2</span>Gabarito</button>
+      <button role="tab" data-aba="folha"><span class="n">3</span>Folha de respostas</button>
+      <button role="tab" data-aba="corrigir"><span class="n">4</span>Corrigir</button>
+      <button role="tab" data-aba="resultados"><span class="n">5</span>Resultados</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="aba" data-aba="turmas" hidden>
+    <div class="row-between">
+      <div>
+        <h2>Turmas</h2>
+        <p class="lead">A ordem da lista é o Nº na chamada: o primeiro nome é o 01, o segundo é o 02, e assim por diante. Quando o aluno pinta o Nº no gabarito, o app preenche o nome sozinho.</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" id="nova-turma">Nova turma</button>
+      </div>
+    </div>
+    <details class="importar" id="importar">
+      <summary>Importar turmas de uma planilha</summary>
+      <div class="importar-body">
+        <p class="muted">No Google Planilhas ou no Excel, selecione as colunas com o <strong>nome</strong> e a <strong>turma</strong> de cada aluno (pode incluir a linha de cabeçalho), copie com Ctrl+C e cole aqui. O app cria uma turma para cada código encontrado e mantém a ordem das linhas como Nº na chamada.</p>
+        <label class="sr-only" for="imp-texto">Linhas copiadas da planilha</label>
+        <textarea id="imp-texto" rows="6" spellcheck="false" placeholder="Nome&#9;Turma&#10;ANA CLAUDIA BRITO DA SILVA&#9;26PMI-EPT-100&#10;DAVI DA SILVA VIEIRA&#9;26PMI-EPT-100"></textarea>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button class="btn primary" id="imp-aplicar">Importar</button>
+          <span class="muted" id="imp-previa"></span>
+        </div>
+      </div>
+    </details>
+    <div class="turmas-layout">
+      <div class="turma-lista" id="turma-lista"></div>
+      <div class="turma-edit" id="turma-edit"></div>
+    </div>
+  </section>
+
+  <section class="aba" data-aba="gabarito" hidden>
+    <div>
+      <h2>Gabarito da prova</h2>
+      <p class="lead">Marque a alternativa certa de cada questão. Questões anuladas contam como acerto para todos. Se mudar o gabarito depois, as notas são recalculadas.</p>
+    </div>
+    <div class="fields">
+      <div class="field"><label for="f-nome">Nome da prova</label><input type="text" id="f-nome" maxlength="60"></div>
+      <div class="field"><label for="f-n">Questões</label><input type="number" id="f-n" min="1" max="75"></div>
+      <div class="field"><label for="f-k">Alternativas</label>
+        <select id="f-k"><option value="2">A–B</option><option value="3">A–C</option><option value="4">A–D</option><option value="5">A–E</option></select></div>
+      <div class="field"><label for="f-valor">Vale (pontos)</label><input type="number" id="f-valor" min="0.5" step="0.5"></div>
+      <div class="field"><label for="f-modelo">Modelo da folha</label>
+        <select id="f-modelo"><option value="padrao">Padrão</option><option value="coluna">Coluna única</option><option value="colunas3">Três colunas</option><option value="bloco">Bloco na prova (1 coluna)</option><option value="bloco3">Bloco na prova (3 colunas)</option></select></div>
+    </div>
+    <div class="paste">
+      <div class="field"><label for="f-cola">Digitar gabarito em sequência</label><input type="text" id="f-cola" placeholder="Ex.: BDACE BADCE  (use - para pular)"></div>
+      <button class="btn" id="aplicar-cola">Aplicar</button>
+    </div>
+    <div id="gab-status"></div>
+    <div class="gab-grid" id="gab-grid"></div>
+  </section>
+
+  <section class="aba" data-aba="folha" hidden>
+    <div class="sheet-layout">
+      <img class="sheet-img" id="sheet-img" alt="Folha de respostas para imprimir">
+      <div style="display:grid;gap:20px;align-content:start">
+        <div>
+          <h2>Folha de respostas</h2>
+          <p class="lead">Gerada a partir do gabarito atual. Os quadrados pretos dos cantos servem para o app localizar a folha na foto.</p>
+        </div>
+        <ol class="steps-list" id="folha-passos"></ol>
+        <p class="notice" id="folha-aviso" hidden>O número de questões ou alternativas mudou depois que você corrigiu folhas desta prova. Imprima a folha nova antes de corrigir mais provas.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="aba" data-aba="corrigir" hidden>
+    <div class="drop" id="drop">
+      <div>
+        <h2>Corrigir</h2>
+        <p class="lead">Aponte a câmera para o gabarito e o app corrige sozinho, uma folha atrás da outra. Também dá para tirar foto ou enviar fotos prontas. Tudo acontece no seu aparelho: nenhuma imagem sai dele.</p>
+      </div>
+      <div class="turma-pick"><label for="c-turma">Turma destas folhas</label><select id="c-turma" data-turma-sel></select></div>
+      <div class="actions">
+        <button class="btn primary" id="cam-abrir">Ler pela câmera</button>
+        <label class="btn" for="foto-cam">Tirar foto<input type="file" id="foto-cam" accept="image/*" capture="environment" class="sr-only"></label>
+        <label class="btn" for="foto">Enviar fotos<input type="file" id="foto" accept="image/*" multiple class="sr-only"></label>
+        <button class="btn" id="demo">Testar com folha de exemplo</button>
+      </div>
+      <ul class="tips">
+        <li>Gabarito inteiro na tela, com os 4 quadrados</li>
+        <li>Boa luz, sem sombra forte</li>
+        <li>Câmera de cima, sem inclinar muito</li>
+        <li>Pode arrastar arquivos para cá</li>
+      </ul>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="aba" data-aba="resultados" hidden>
+    <div class="row-between">
+      <div><h2>Resultados</h2><p class="lead" id="res-lead"></p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" id="copiar">Copiar para planilha</button>
+        <button class="btn danger" id="limpar">Apagar resultados</button>
+      </div>
+    </div>
+    <div class="turma-pick"><label for="r-turma">Turma</label><select id="r-turma" data-turma-sel></select></div>
+    <div id="res-body"></div>
+  </section>
+</main>
+
+<div class="cam" id="cam" role="dialog" aria-modal="true" aria-label="Leitura pela câmera" hidden>
+  <video id="cam-video" playsinline muted autoplay></video>
+  <canvas id="cam-guia" aria-hidden="true"></canvas>
+  <div class="cam-top">
+    <div class="cam-info"><strong id="cam-prova"></strong><span id="cam-status">Abrindo a câmera…</span></div>
+    <button class="btn small" id="cam-fechar">Fechar</button>
+  </div>
+  <div class="cam-res" id="cam-res" hidden></div>
+  <div class="cam-bottom"><span id="cam-cont">0 folhas lidas</span></div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

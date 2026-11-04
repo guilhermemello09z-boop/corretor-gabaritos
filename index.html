@@ -17,13 +17,19 @@
       <div class="prova-pick">
         <label class="sr-only" for="prova-sel">Prova</label>
         <select id="prova-sel"></select>
-        <button class="btn small" id="nova">Nova prova</button>
-        <button class="btn small danger" id="excluir">Excluir</button>
+        <button class="btn small so-coord" id="nova">Nova prova</button>
+        <button class="btn small danger so-coord" id="excluir">Excluir</button>
+      </div>
+      <div class="quem-sou">
+        <span><strong id="eu-escola"></strong><span id="eu-info" class="muted"></span></span>
+        <button class="btn small" id="trocar">Trocar escola</button>
+        <button class="btn small" id="sair">Sair</button>
       </div>
     </div>
     <nav class="steps" role="tablist" aria-label="Etapas">
-      <button role="tab" data-aba="turmas"><span class="n">1</span>Turmas</button>
-      <button role="tab" data-aba="gabarito"><span class="n">2</span>Gabarito</button>
+      <button role="tab" data-aba="escola" class="so-coord"><span class="n">0</span>Escola</button>
+      <button role="tab" data-aba="turmas" class="so-coord"><span class="n">1</span>Turmas</button>
+      <button role="tab" data-aba="gabarito" class="so-coord"><span class="n">2</span>Gabarito</button>
       <button role="tab" data-aba="folha"><span class="n">3</span>Folha de respostas</button>
       <button role="tab" data-aba="corrigir"><span class="n">4</span>Corrigir</button>
       <button role="tab" data-aba="resultados"><span class="n">5</span>Resultados</button>
@@ -32,6 +38,31 @@
 </header>
 
 <main class="wrap">
+  <section class="aba" data-aba="escola" hidden>
+    <div>
+      <h2>Escola</h2>
+      <p class="lead">Cadastre o e-mail Google de cada pessoa da escola. Coordenadores cuidam das turmas, das provas e dos gabaritos. Professores só corrigem as provas e veem as correções que eles mesmos fizeram.</p>
+    </div>
+    <div class="field" style="max-width:520px"><label for="esc-nome">Nome da escola</label><input type="text" id="esc-nome" maxlength="80"></div>
+    <form class="membro-novo" id="membro-novo">
+      <div class="field" style="flex:2 1 260px"><label for="m-email">E-mail Google</label><input type="email" id="m-email" placeholder="professor@gmail.com" required></div>
+      <div class="field" style="flex:1 1 160px"><label for="m-papel">Acesso</label>
+        <select id="m-papel"><option value="professor">Professor</option><option value="coordenador">Coordenador de área</option></select></div>
+      <button class="btn primary" type="submit">Cadastrar</button>
+    </form>
+    <div class="table-wrap"><table>
+      <thead><tr><th>E-mail</th><th>Acesso</th><th></th></tr></thead>
+      <tbody id="membros-lista"></tbody>
+    </table></div>
+    <details class="importar" id="levar-locais" hidden>
+      <summary>Levar para a escola as turmas e provas salvas neste aparelho</summary>
+      <div class="importar-body">
+        <p class="muted" id="levar-resumo"></p>
+        <div><button class="btn primary" id="levar-aplicar">Enviar para a escola</button></div>
+      </div>
+    </details>
+  </section>
+
   <section class="aba" data-aba="turmas" hidden>
     <div class="row-between">
       <div>
@@ -143,6 +174,18 @@
   <div class="cam-bottom"><span id="cam-cont">0 folhas lidas</span></div>
 </div>
 
+<div class="entrada" id="entrada">
+  <div class="entrada-caixa">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i class="f"></i><i></i></span>Corretor de Gabaritos</div>
+    <div id="entrada-corpo"><p class="muted">Carregando…</p></div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="js/firebase-config.js"></script>
+<script src="js/nuvem.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

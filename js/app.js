@@ -13,48 +13,118 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 function novaProva(nome, n = 20, k = 5, valor = 10) {
   return { id: uid(), nome, n, k, valor, gab: Array(n).fill(-1), anul: Array(n).fill(false), versao: 1 };
 }
-function load() {
+// Turmas, provas e resultados ficam na escola (Firebase). Neste aparelho ficam só as preferências
+// de quem usa: aba aberta, prova e turma escolhidas. KEY guarda dados de versões antigas, que o
+// coordenador pode levar para a escola.
+const PREFS = ['atual', 'aba', 'turmaAtual', 'turmaEdit', 'turmaFiltro'];
+const prefsKey = () => `corretor-gabaritos.prefs.${nuvem.eid || 'sem-escola'}`;
+const nuvem = { eid: null, escolaNome: '', papel: null, conhecido: { provas: new Map(), turmas: new Map(), resultados: new Map() }, parar: [], timer: 0, carregou: new Set() };
+const ehCoord = () => nuvem.papel === 'coordenador';
+S.turmas = [];
+
+function dadosAntigos() {
   try {
     const d = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (d && Array.isArray(d.provas) && d.provas.length) Object.assign(S, d);
-  } catch (e) {}
-  if (!S.provas.length) {
-    const p = novaProva('Matemática · 9º ano · Prova 2', 20, 5, 10);
-    p.gab = [...'BDACEBADCEABDCEBACDE'].map(c => LETRAS.indexOf(c));
-    S.provas = [p]; S.atual = p.id; S.primeira = true;
-  }
-  if (!S.modelosV2) {
-    const mat = Object.assign(novaProva('Matemática', 15, 5, 10), { modelo: 'coluna' });
-    const nat = Object.assign(novaProva('Ciências da Natureza', 24, 5, 10), { modelo: 'colunas3' });
-    S.provas.push(mat, nat);
-    S.modelosV2 = true;
-    if (!S.primeira) { S.atual = mat.id; S.aba = 'gabarito'; }
-  }
-  if (!S.modelosV3) {
-    S.provas.forEach(p => {
-      if (p.nome === 'Matemática' && p.modelo === 'coluna') { p.modelo = 'bloco'; p.versao = (p.versao || 1) + 1; }
-      if (p.nome === 'Ciências da Natureza' && p.modelo === 'colunas3') { p.modelo = 'bloco3'; p.versao = (p.versao || 1) + 1; }
-    });
-    S.modelosV3 = true;
-  }
-  if (!Array.isArray(S.turmas)) S.turmas = [];
-  if (!S.turmasV1) {
-    // Os nomes dos alunos nunca ficam no código do site: cada professor importa as turmas no próprio aparelho
-    if (Array.isArray(S.turma) && S.turma.some(Boolean)) S.turmas.push({ id: uid(), nome: 'Minha turma', alunos: S.turma.filter(Boolean) });
-    delete S.turma;
-    S.turmasV1 = true;
-  }
-  if (!turmaPorId(S.turmaAtual)) S.turmaAtual = S.turmas[0]?.id || null;
-  if (!turmaPorId(S.turmaEdit)) S.turmaEdit = S.turmas[0]?.id || null;
+    return { provas: Array.isArray(d?.provas) ? d.provas : [], turmas: Array.isArray(d?.turmas) ? d.turmas.filter(t => t.alunos?.length) : [] };
+  } catch (e) { return { provas: [], turmas: [] }; }
+}
+function lerPrefs() {
+  try { Object.assign(S, JSON.parse(localStorage.getItem(prefsKey()) || '{}')); } catch (e) {}
+}
+// Garante uma prova escolhida; sem provas na escola, usa uma prova vazia que nunca é gravada
+function ajustarEscolhas() {
+  if (!S.provas.length) S.provas = [Object.assign(novaProva('Nenhuma prova cadastrada', 10, 5, 10), { local: true })];
   if (!prova()) S.atual = S.provas[0].id;
+  if (S.turmaAtual && !turmaPorId(S.turmaAtual)) S.turmaAtual = S.turmas[0]?.id || null;
+  if (!S.turmaAtual) S.turmaAtual = S.turmas[0]?.id || null;
+  if (!turmaPorId(S.turmaEdit)) S.turmaEdit = S.turmas[0]?.id || null;
 }
 function save() {
-  try {
-    localStorage.setItem(KEY, JSON.stringify({
-      provas: S.provas, atual: S.atual, res: S.res, aba: S.aba, modelosV2: S.modelosV2, modelosV3: S.modelosV3,
-      turmas: S.turmas, turmasV1: S.turmasV1, turmaAtual: S.turmaAtual, turmaEdit: S.turmaEdit, turmaFiltro: S.turmaFiltro,
-    }));
-  } catch (e) {}
+  try { localStorage.setItem(prefsKey(), JSON.stringify(Object.fromEntries(PREFS.map(k => [k, S[k]])))); } catch (e) {}
+  clearTimeout(nuvem.timer);
+  nuvem.timer = setTimeout(sincronizar, 400);
+}
+
+/* ---------- Sincronização com a escola ----------
+   Cada gravação compara os dados da tela com a última versão vinda da escola e envia só o que mudou. */
+const canon = v => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(c => [c, x[c]])) : x));
+const limpo = o => JSON.parse(JSON.stringify(o));
+// Folhas de exemplo ficam só neste aparelho e nunca entram nos resultados da escola
+const todosResultados = () => Object.entries(S.res).flatMap(([provaId, lista]) => lista.filter(r => !r.exemplo).map(r => ({ ...r, provaId })));
+const vistas = { provas: () => S.provas.filter(p => !p.local), turmas: () => S.turmas, resultados: todosResultados };
+const podeGravar = { provas: ehCoord, turmas: ehCoord, resultados: r => ehCoord() || r.corretor === Nuvem.email() };
+
+function sincronizar() {
+  if (!nuvem.eid) return;
+  for (const col of Object.keys(vistas)) {
+    if (!nuvem.carregou.has(col)) continue; // só depois de receber a primeira versão da escola
+    const conhecido = nuvem.conhecido[col], vistos = new Set();
+    for (const item of vistas[col]()) {
+      vistos.add(item.id);
+      const j = canon(limpo(item));
+      if (conhecido.get(item.id) === j || !podeGravar[col](item)) continue;
+      conhecido.set(item.id, j);
+      const { id, ...dados } = limpo(item);
+      Nuvem.colecao(nuvem.eid, col).doc(id).set(dados).catch(falhaGravar);
+    }
+    for (const [id, j] of [...conhecido]) {
+      if (vistos.has(id)) continue;
+      conhecido.delete(id);
+      if (podeGravar[col](JSON.parse(j))) Nuvem.colecao(nuvem.eid, col).doc(id).delete().catch(falhaGravar);
+    }
+  }
+}
+function falhaGravar(e) {
+  toast(e?.code === 'permission-denied' ? 'Você não tem permissão para alterar isso.' : 'Não consegui salvar na escola. Confira a internet.');
+}
+function ouvirEscola() {
+  nuvem.parar.forEach(f => f()); nuvem.parar = []; nuvem.carregou.clear();
+  const ouvir = (col, consulta, aplicar) => nuvem.parar.push(consulta.onSnapshot(snap => {
+    let itens = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    const primeira = !nuvem.carregou.has(col);
+    let pendente = false;
+    if (!primeira) {
+      // Edições feitas aqui e ainda não enviadas valem mais que a versão que acabou de chegar
+      const antes = nuvem.conhecido[col], locais = vistas[col]();
+      const sujos = locais.filter(it => podeGravar[col](it) && antes.get(it.id) !== canon(limpo(it)));
+      const apagados = new Set([...antes.keys()].filter(id => !locais.some(x => x.id === id)));
+      if (sujos.length || apagados.size) {
+        pendente = true;
+        const porIdSujo = new Map(sujos.map(it => [it.id, it]));
+        itens = itens.filter(it => !apagados.has(it.id)).map(it => porIdSujo.get(it.id) || it);
+        sujos.forEach(it => { if (!itens.some(x => x.id === it.id)) itens.push(it); });
+      }
+    }
+    nuvem.conhecido[col] = new Map(snap.docs.map(d => [d.id, canon(limpo({ ...d.data(), id: d.id }))]));
+    nuvem.carregou.add(col);
+    if (pendente) save();
+    const porId = l => canon(limpo(l).sort((a, b) => (a.id < b.id ? -1 : 1)));
+    if (!primeira && porId(itens) === porId(vistas[col]())) return; // nada mudou na tela
+    aplicar(itens);
+    ajustarEscolhas();
+    if (col === 'provas' && primeira && ehCoord() && S.provas[0]?.local) {
+      // Escola nova: o coordenador começa com uma prova em branco para preencher
+      S.provas = [novaProva('Prova 1')]; S.atual = S.provas[0].id; save();
+    }
+    renderTudo();
+  }, e => toast(e?.code === 'permission-denied' ? 'Sem permissão para ver os dados desta escola.' : 'Sem conexão com a escola.')));
+  const eid = nuvem.eid;
+  ouvir('provas', Nuvem.colecao(eid, 'provas'), itens => { S.provas = itens.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR', { numeric: true })); });
+  ouvir('turmas', Nuvem.colecao(eid, 'turmas'), itens => { S.turmas = itens.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true })); });
+  const qRes = ehCoord() ? Nuvem.colecao(eid, 'resultados') : Nuvem.colecao(eid, 'resultados').where('corretor', '==', Nuvem.email());
+  ouvir('resultados', qRes, itens => {
+    const exemplos = Object.entries(S.res).flatMap(([provaId, l]) => l.filter(r => r.exemplo).map(r => ({ ...r, provaId })));
+    S.res = {};
+    itens.concat(exemplos).sort((a, b) => (b.quando || 0) - (a.quando || 0)).forEach(({ provaId, ...r }) => (S.res[provaId] ||= []).push(r));
+  });
+  if (ehCoord()) {
+    nuvem.parar.push(Nuvem.membros(eid).onSnapshot(snap => { nuvem.membros = snap.docs.map(d => d.data()); if (S.aba === 'escola') renderEscola(); }, () => {}));
+  }
+}
+function renderTudo() {
+  renderProvas(); renderSeletoresTurma();
+  if (S.aba === 'gabarito') renderGabarito();
+  irPara(S.aba);
 }
 const turmaPorId = id => S.turmas.find(t => t.id === id);
 // Nome digitado na folha corrigida; se vazio, o da turma da folha pelo Nº na chamada
@@ -473,7 +543,7 @@ async function carregarImagem(file) {
 }
 function registrar(leitura, p, extra = {}) {
   if (!leitura.ok) { erros.unshift({ id: uid(), nome: extra.arquivo || 'Foto', erro: leitura.erro }); return null; }
-  const r = { id: uid(), turmaId: S.turmaAtual || null, num: leitura.num, nome: extra.nome || '', resp: leitura.resp, duvidas: leitura.duvidas, exemplo: !!extra.exemplo, quando: Date.now(), versao: p.versao };
+  const r = { id: uid(), corretor: Nuvem.email(), corretorNome: Nuvem.nome(), turmaId: S.turmaAtual || null, num: leitura.num, nome: extra.nome || '', resp: leitura.resp, duvidas: leitura.duvidas, exemplo: !!extra.exemplo, quando: Date.now(), versao: p.versao };
   const base = document.createElement('canvas'); base.width = leitura.cv.width; base.height = leitura.cv.height;
   base.getContext('2d').drawImage(leitura.cv, 0, 0);
   sessao.set(r.id, { base, H: leitura.H });
@@ -482,6 +552,7 @@ function registrar(leitura, p, extra = {}) {
   return r;
 }
 async function processar(files) {
+  if (semProva()) return;
   const p = prova();
   const lista = [...files].filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(f.name));
   if (!lista.length) { toast('Escolha arquivos de imagem (JPG ou PNG).'); return; }
@@ -500,7 +571,14 @@ async function processar(files) {
   toast(`${ok} ${ok > 1 ? 'folhas lidas' : 'folha lida'}. Confira as marcadas em amarelo.`);
   renderResultados();
 }
+// Sem prova cadastrada pelo coordenador não há gabarito para comparar
+function semProva() {
+  if (!prova().local) return false;
+  toast(ehCoord() ? 'Cadastre uma prova na aba Gabarito antes de corrigir.' : 'O coordenador ainda não cadastrou nenhuma prova.');
+  return true;
+}
 function exemplo() {
+  if (semProva()) return;
   const p = prova();
   registrar(lerFolha(fotoExemplo(p), p), p, { exemplo: true, nome: turmaPorId(S.turmaAtual)?.alunos.length ? '' : 'Aluno de exemplo' });
   renderCorrigir(); renderResultados();
@@ -516,6 +594,7 @@ const camStatus = t => { $('#cam-status').textContent = t; };
 const camContar = () => { $('#cam-cont').textContent = `${cam.lidas} ${cam.lidas === 1 ? 'folha lida' : 'folhas lidas'}`; };
 
 async function abrirCamera() {
+  if (semProva()) return;
   const t = turmaPorId(S.turmaAtual);
   $('#cam').hidden = false; $('#cam-res').hidden = true;
   $('#cam-prova').textContent = prova().nome + (t ? ' · ' + t.nome : '');
@@ -647,8 +726,11 @@ function armar(btn, rotulo, acao) {
   setTimeout(() => { if (btn.classList.contains('armed')) { btn.classList.remove('armed'); btn.textContent = btn.dataset.txt; } }, 3500);
 }
 
+const ABAS_COORD = ['escola', 'turmas', 'gabarito'];
 function irPara(aba) {
+  if (!ehCoord() && ABAS_COORD.includes(aba)) aba = 'corrigir';
   S.aba = aba; save();
+  if (aba === 'escola') renderEscola();
   document.querySelectorAll('nav.steps button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.aba === aba)));
   document.querySelectorAll('section.aba').forEach(s => (s.hidden = s.dataset.aba !== aba));
   if (aba === 'folha') renderFolha();
@@ -779,7 +861,7 @@ function filtrados() {
 function renderResultados() {
   renderSeletoresTurma();
   const p = prova(), rs = filtrados(), t = turmaPorId(S.turmaFiltro);
-  $('#res-lead').textContent = `${p.nome}${t ? ' · ' + t.nome : ''} · ${rs.length} ${rs.length === 1 ? 'folha corrigida' : 'folhas corrigidas'}. Os dados ficam salvos neste navegador.`;
+  $('#res-lead').textContent = `${p.nome}${t ? ' · ' + t.nome : ''} · ${rs.length} ${rs.length === 1 ? 'folha corrigida' : 'folhas corrigidas'}${ehCoord() ? '' : ' por você'}.`;
   const corrigidos = new Set(rs.map(r => r.num));
   const faltam = t ? t.alunos.map((nome, i) => ({ nome, num: i + 1 })).filter(a => a.nome && !corrigidos.has(a.num)) : [];
   const faltamHTML = t && t.alunos.length ? `<div style="display:grid;gap:8px"><h3>${faltam.length ? `Faltam corrigir (${faltam.length})` : 'Todos os alunos da turma foram corrigidos'}</h3>${faltam.length ? `<div class="chips">${faltam.map(a => `<span class="chip">${String(a.num).padStart(2, '0')} · ${esc(a.nome)}</span>`).join('')}</div>` : ''}</div>` : '';
@@ -836,8 +918,8 @@ $('#nova').addEventListener('click', () => {
 });
 $('#excluir').addEventListener('click', e => armar(e.currentTarget, 'Confirmar exclusão', () => {
   delete S.res[S.atual];
-  S.provas = S.provas.filter(p => p.id !== S.atual);
-  if (!S.provas.length) S.provas.push(novaProva('Nova prova 1'));
+  S.provas = S.provas.filter(p => p.id !== S.atual && !p.local);
+  if (!S.provas.length) S.provas.push(novaProva('Prova 1'));
   S.atual = S.provas[0].id; save(); renderProvas(); renderGabarito(); irPara(S.aba); toast('Prova excluída');
 }));
 $('#f-nome').addEventListener('input', e => { prova().nome = e.target.value; save(); renderProvas(); });
@@ -1018,10 +1100,138 @@ $('#limpar').addEventListener('click', e => armar(e.currentTarget, 'Confirmar: a
   apagar.forEach(id => sessao.delete(id)); erros.length = 0; save(); renderResultados(); renderCorrigir(); toast('Resultados apagados');
 }));
 
+/* ---------- Escola: pessoas e permissões (só coordenadores) ---------- */
+const PAPEIS = { coordenador: 'Coordenador de área', professor: 'Professor' };
+function renderEscola() {
+  if (!ehCoord()) return;
+  if (document.activeElement?.id !== 'esc-nome') $('#esc-nome').value = nuvem.escolaNome;
+  const lista = (nuvem.membros || []).slice().sort((a, b) => (a.papel === b.papel ? a.email.localeCompare(b.email) : a.papel === 'coordenador' ? -1 : 1));
+  $('#membros-lista').innerHTML = lista.map(m => `<tr>
+      <td>${esc(m.email)}${m.email === Nuvem.email() ? ' <span class="muted">(você)</span>' : ''}</td>
+      <td>${m.email === Nuvem.email() ? `<span class="pill coord">${PAPEIS[m.papel]}</span>`
+        : `<label class="sr-only" for="pp-${esc(m.email)}">Acesso de ${esc(m.email)}</label><select id="pp-${esc(m.email)}" data-papel-de="${esc(m.email)}">${Object.entries(PAPEIS).map(([v, t]) => `<option value="${v}" ${m.papel === v ? 'selected' : ''}>${t}</option>`).join('')}</select>`}</td>
+      <td>${m.email === Nuvem.email() ? '' : `<button class="btn small danger" data-remover="${esc(m.email)}">Remover</button>`}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">Carregando…</td></tr>';
+  const antigos = dadosAntigos();
+  $('#levar-locais').hidden = !(antigos.turmas.length || antigos.provas.length);
+  $('#levar-resumo').textContent = `Neste aparelho há ${antigos.turmas.length} ${antigos.turmas.length === 1 ? 'turma' : 'turmas'} e ${antigos.provas.length} ${antigos.provas.length === 1 ? 'prova' : 'provas'} de antes do login. Turmas e provas com o mesmo nome de uma que já existe na escola não são enviadas.`;
+}
+$('#esc-nome').addEventListener('change', e => {
+  const nome = e.target.value.trim(); if (!nome) { e.target.value = nuvem.escolaNome; return; }
+  Nuvem.escola(nuvem.eid).update({ nome }).then(() => { nuvem.escolaNome = nome; mostrarQuemSou(); toast('Nome da escola salvo'); }).catch(falhaGravar);
+});
+$('#membro-novo').addEventListener('submit', e => {
+  e.preventDefault();
+  const email = $('#m-email').value.trim().toLowerCase(), papel = $('#m-papel').value;
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast('Digite um e-mail válido.'); return; }
+  if ((nuvem.membros || []).some(m => m.email === email)) { toast('Este e-mail já está cadastrado. Mude o acesso na lista.'); return; }
+  Nuvem.membro(nuvem.eid, email).set({ escolaId: nuvem.eid, email, papel, nome: '' })
+    .then(() => { $('#m-email').value = ''; toast(`${email} cadastrado como ${PAPEIS[papel].toLowerCase()}`); })
+    .catch(falhaGravar);
+});
+$('#membros-lista').addEventListener('change', e => {
+  const email = e.target.dataset.papelDe; if (!email) return;
+  Nuvem.membro(nuvem.eid, email).update({ papel: e.target.value }).then(() => toast('Acesso alterado')).catch(falhaGravar);
+});
+$('#membros-lista').addEventListener('click', e => {
+  const b = e.target.closest('[data-remover]'); if (!b) return;
+  armar(b, 'Confirmar', () => Nuvem.membro(nuvem.eid, b.dataset.remover).delete().then(() => toast('Pessoa removida da escola')).catch(falhaGravar));
+});
+$('#levar-aplicar').addEventListener('click', () => {
+  const antigos = dadosAntigos();
+  const turmasNovas = antigos.turmas.filter(t => !S.turmas.some(x => x.nome === t.nome));
+  const provasNovas = antigos.provas.filter(p => !S.provas.some(x => x.nome === p.nome));
+  S.turmas.push(...turmasNovas.map(t => ({ id: uid(), nome: t.nome, alunos: t.alunos })));
+  S.provas = S.provas.filter(p => !p.local).concat(provasNovas.map(p => ({ ...p, id: uid() })));
+  ajustarEscolhas(); save(); renderTudo();
+  try { localStorage.removeItem(KEY); } catch (e) {}
+  $('#levar-locais').hidden = true;
+  toast(`Enviadas ${turmasNovas.length} turmas e ${provasNovas.length} provas para a escola`);
+});
+
+/* ---------- Entrada: login com Google e escolha da escola ---------- */
+const GOOGLE_ICONE = '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
+const entrada = html => { $('#entrada').hidden = false; $('#entrada-corpo').innerHTML = html; };
+
+function telaLogin(msg) {
+  entrada(`<div><h2>Entrar</h2><p class="muted">Use a conta Google que o coordenador da sua escola cadastrou.</p></div>
+    <button class="btn google" id="entrar-google">${GOOGLE_ICONE}Entrar com Google</button>
+    ${msg ? `<p class="notice">${esc(msg)}</p>` : ''}`);
+  $('#entrar-google').addEventListener('click', () => {
+    Nuvem.entrar().catch(e => {
+      if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') return;
+      telaLogin(e?.code === 'auth/unauthorized-domain' ? 'Este endereço ainda não foi liberado no Firebase. Veja o guia de configuração.' : 'Não consegui entrar. Tente de novo.');
+    });
+  });
+}
+async function telaEscolas() {
+  entrada('<p class="muted">Procurando suas escolas…</p>');
+  let escolas = [];
+  try { escolas = await Nuvem.minhasEscolas(); }
+  catch (e) { entrada(`<p class="notice">Não consegui buscar suas escolas. Confira a internet e recarregue a página.</p>`); return; }
+  const ultima = (() => { try { return localStorage.getItem('corretor-gabaritos.escola'); } catch (e) { return null; } })();
+  const auto = escolas.find(x => x.id === ultima) || (escolas.length === 1 ? escolas[0] : null);
+  if (auto && !nuvem.trocando) { entrarNaEscola(auto); return; }
+  nuvem.trocando = false;
+  entrada(`
+    <div><h2>${escolas.length ? 'Escolha a escola' : 'Você ainda não está em nenhuma escola'}</h2>
+    <p class="muted">Conectado como <strong>${esc(Nuvem.email())}</strong>.${escolas.length ? '' : ' Peça ao coordenador para cadastrar este e-mail na escola, ou cadastre uma escola nova.'}</p></div>
+    ${escolas.length ? `<div class="escolas">${escolas.map(x => `<button data-escola="${x.id}"><span>${esc(x.nome)}</span><span class="pill ${x.papel === 'coordenador' ? 'coord' : ''}">${PAPEIS[x.papel]}</span></button>`).join('')}</div>` : ''}
+    <details class="importar"${escolas.length ? '' : ' open'}>
+      <summary>Cadastrar uma escola nova</summary>
+      <form class="importar-body" id="nova-escola">
+        <p class="muted">Você será o primeiro coordenador e poderá cadastrar os professores e outros coordenadores.</p>
+        <div class="field"><label for="ne-nome">Nome da escola</label><input type="text" id="ne-nome" maxlength="80" required placeholder="Centro Educa Mais Dom Marcelino de Milão"></div>
+        <div><button class="btn primary" type="submit">Cadastrar escola</button></div>
+      </form>
+    </details>
+    <button class="btn small" id="entrada-sair">Entrar com outra conta</button>`);
+  $('#entrada-corpo').querySelectorAll('[data-escola]').forEach(b => b.addEventListener('click', () => entrarNaEscola(escolas.find(x => x.id === b.dataset.escola))));
+  $('#entrada-sair').addEventListener('click', () => Nuvem.sair());
+  $('#nova-escola').addEventListener('submit', async e => {
+    e.preventDefault();
+    const nome = $('#ne-nome').value.trim(); if (!nome) return;
+    e.submitter && (e.submitter.disabled = true);
+    try {
+      const id = await Nuvem.criarEscola(nome);
+      entrarNaEscola({ id, nome, papel: 'coordenador' }, 'escola');
+    } catch (err) { toast('Não consegui cadastrar a escola. Tente de novo.'); e.submitter && (e.submitter.disabled = false); }
+  });
+}
+function mostrarQuemSou() {
+  $('#eu-escola').textContent = nuvem.escolaNome;
+  $('#eu-info').textContent = `${Nuvem.email()} · ${PAPEIS[nuvem.papel]}`;
+}
+function entrarNaEscola(escola, abaInicial) {
+  Object.assign(nuvem, { eid: escola.id, escolaNome: escola.nome, papel: escola.papel, membros: [] });
+  try { localStorage.setItem('corretor-gabaritos.escola', escola.id); } catch (e) {}
+  Object.assign(S, { provas: [], turmas: [], res: {}, atual: null, turmaAtual: null, turmaEdit: null, turmaFiltro: '*', aba: ehCoord() ? 'turmas' : 'corrigir' });
+  sessao.clear(); erros.length = 0;
+  lerPrefs();
+  if (abaInicial) S.aba = abaInicial;
+  document.body.dataset.papel = nuvem.papel;
+  mostrarQuemSou();
+  ajustarEscolhas();
+  renderTudo();
+  ouvirEscola();
+  $('#entrada').hidden = true;
+}
+function sairDaEscola() {
+  nuvem.parar.forEach(f => f()); nuvem.parar = [];
+  if (cam.ativo) fecharCamera();
+  Object.assign(nuvem, { eid: null, papel: null, escolaNome: '' });
+}
+$('#trocar').addEventListener('click', () => { sairDaEscola(); nuvem.trocando = true; telaEscolas(); });
+$('#sair').addEventListener('click', () => { sairDaEscola(); Nuvem.sair(); });
+
 /* ---------- Início ---------- */
-load();
-renderProvas(); renderGabarito(); renderSeletoresTurma();
-if (S.primeira) { S.aba = 'corrigir'; exemplo(); }
-irPara(S.aba);
+if (!Nuvem.configurado) {
+  entrada(`<div><h2>Falta configurar o Firebase</h2><p class="muted">Preencha o arquivo <strong>js/firebase-config.js</strong> com os dados do projeto Firebase da escola, como explica o README.</p></div>`);
+} else {
+  Nuvem.aoMudarUsuario(u => {
+    if (!u) { sairDaEscola(); telaLogin(); }
+    else if (!nuvem.eid) telaEscolas();
+  });
+}
 window.__corretor = { lerFolha, fotoExemplo, prova, layout };
 })();

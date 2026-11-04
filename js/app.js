@@ -75,6 +75,10 @@ function sincronizar() {
     }
   }
 }
+// Ao fechar, recarregar ou trocar de aba/app, envia na hora o que ainda estava esperando para ser salvo
+const salvarJa = () => { clearTimeout(nuvem.timer); sincronizar(); };
+window.addEventListener('pagehide', salvarJa);
+document.addEventListener('visibilitychange', () => { if (document.hidden) salvarJa(); });
 function falhaGravar(e) {
   toast(e?.code === 'permission-denied' ? 'Você não tem permissão para alterar isso.' : 'Não consegui salvar na escola. Confira a internet.');
 }

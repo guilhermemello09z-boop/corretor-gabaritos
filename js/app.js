@@ -11,7 +11,8 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 
 /* ---------- Estado ---------- */
 function novaProva(nome, n = 20, k = 5, valor = 10) {
-  return { id: uid(), nome, n, k, valor, gab: Array(n).fill(-1), anul: Array(n).fill(false), versao: 1 };
+  // Toda prova nova começa no bloco "GABARITO" que o professor cola na prova (modelo usado pela escola)
+  return { id: uid(), nome, n, k, valor, modelo: 'bloco', gab: Array(n).fill(-1), anul: Array(n).fill(false), versao: 1 };
 }
 // Turmas, provas e resultados ficam na escola (Firebase). Neste aparelho ficam só as preferências
 // de quem usa: aba aberta, prova e turma escolhidas. KEY guarda dados de versões antigas, que o
@@ -157,12 +158,14 @@ const SW = 1240, SH = 1754, FS = 80;
 const FID = [[70, 70], [1170, 70], [1170, 1684], [70, 1684]];
 const ORI = { x: 160, y: 70, s: 34 };
 // Modelos de folha: 'padrao' (listrado, até 3 colunas), 'coluna' (coluna única) e 'colunas3' (três colunas com divisórias)
-// ocupam uma folha A4 inteira; 'bloco' e 'bloco3' são só o quadro do gabarito, para colar dentro da prova.
-const MODELOS = { padrao: 'Padrão', coluna: 'Coluna única', colunas3: 'Três colunas', bloco: 'Bloco na prova (1 coluna)', bloco3: 'Bloco na prova (3 colunas)' };
-const ehBloco = p => p.modelo === 'bloco' || p.modelo === 'bloco3';
+// ocupam uma folha A4 inteira; 'bloco', 'bloco3' e 'bloco4' são só o quadro do gabarito, para colar dentro da prova.
+const MODELOS = { padrao: 'Padrão', coluna: 'Coluna única', colunas3: 'Três colunas', bloco: 'Bloco na prova (1 coluna)', bloco3: 'Bloco na prova (3 colunas)', bloco4: 'Bloco na prova (4 colunas)' };
+const ehBloco = p => p.modelo === 'bloco' || p.modelo === 'bloco3' || p.modelo === 'bloco4';
 function layoutBloco(p) {
-  const { n, k } = p, R = 17, dx = 56, labelW = 84, dy = 56, top = 290, gap = 36;
-  const cols = p.modelo === 'bloco3' ? Math.min(3, n) : Math.ceil(n / 20);
+  const { n, k } = p, R = 17, dy = 56, top = 290;
+  const cols = p.modelo === 'bloco4' ? Math.min(4, n) : p.modelo === 'bloco3' ? Math.min(3, n) : Math.ceil(n / 20);
+  // Com 4 colunas o quadro fica mais compacto na largura para caber em meia folha A4
+  const dx = cols >= 4 ? 50 : 56, labelW = cols >= 4 ? 76 : 84, gap = cols >= 4 ? 28 : 36;
   const rows = Math.ceil(n / cols), colW = labelW + k * dx;
   const gradeW = cols * colW + (cols - 1) * gap;
   const W = Math.max(580, Math.round(gradeW + 80)), H = top + rows * dy + 80;
@@ -497,7 +500,7 @@ function fotoExemplo(p) {
     const sx = sheet.getContext('2d');
     sx.fillStyle = '#fff'; sx.fillRect(0, 0, SW, SH);
     sx.fillStyle = '#222'; sx.textAlign = 'left'; sx.textBaseline = 'alphabetic';
-    const tres = p.modelo === 'bloco3';
+    const tres = p.modelo === 'bloco3' || p.modelo === 'bloco4'; // quadros largos vão na metade de baixo da página
     const area = tres ? { x: 90, y: 900, w: 1060 } : { x: 650, y: 110, w: 500 };
     const esc = Math.min(area.w / L.W, (SH - area.y - 160) / L.H);
     const texto = ['QUESTÃO 14. LM – D34', '(ENEM) Uma escola realizou um teste com 100 alunos,', 'com notas de 0 a 10. A maioria dos alunos tirou nota 5.', 'Se adicionarmos um aluno que tirou nota 10, o que', 'acontece com a média e a mediana?', 'Ⓐ A média e a mediana aumentam.', 'Ⓑ A média aumenta, mas a mediana permanece', 'Ⓒ A mediana aumenta, mas a média permanece', 'Ⓓ A média diminui.', 'Ⓔ Não há alteração significativa.', '', 'QUESTÃO 15. LM – D34', '(ENEM) Em um bairro, as rendas mensais das famílias', 'são: R$ 1.000, R$ 1.000, R$ 1.500, R$ 2.000,', 'R$ 10.000. Qual é a diferença entre a média e a', 'mediana dessas rendas?', 'Ⓐ R$ 500', 'Ⓑ R$ 1.500', 'Ⓒ R$ 2.000', 'Ⓓ R$ 2.500'];
@@ -925,7 +928,7 @@ $('#excluir').addEventListener('click', e => armar(e.currentTarget, 'Confirmar e
 $('#f-nome').addEventListener('input', e => { prova().nome = e.target.value; save(); renderProvas(); });
 $('#f-n').addEventListener('change', e => mudarEstrutura(+e.target.value, prova().k));
 $('#f-k').addEventListener('change', e => mudarEstrutura(prova().n, +e.target.value));
-$('#f-modelo').addEventListener('change', e => { const p = prova(); p.modelo = e.target.value; p.versao = (p.versao || 1) + 1; save(); toast(`Modelo da folha: ${MODELOS[p.modelo]}. Imprima a folha nova na etapa 2.`); });
+$('#f-modelo').addEventListener('change', e => { const p = prova(); p.modelo = e.target.value; p.versao = (p.versao || 1) + 1; save(); toast(`Modelo da folha: ${MODELOS[p.modelo]}. Imprima a folha nova na etapa 3.`); });
 $('#f-valor').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { prova().valor = v; save(); } else e.target.value = prova().valor; });
 $('#aplicar-cola').addEventListener('click', () => {
   const p = prova();
@@ -1181,7 +1184,7 @@ async function telaEscolas() {
       <summary>Cadastrar uma escola nova</summary>
       <form class="importar-body" id="nova-escola">
         <p class="muted">Você será o primeiro coordenador e poderá cadastrar os professores e outros coordenadores.</p>
-        <div class="field"><label for="ne-nome">Nome da escola</label><input type="text" id="ne-nome" maxlength="80" required placeholder="Centro Educa Mais Dom Marcelino de Milão"></div>
+        <div class="field"><label for="ne-nome">Nome da escola</label><input type="text" id="ne-nome" maxlength="80" required placeholder="Digite aqui. Ex.: Centro Educa Mais…"></div>
         <div><button class="btn primary" type="submit">Cadastrar escola</button></div>
       </form>
     </details>

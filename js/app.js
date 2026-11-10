@@ -782,7 +782,20 @@ function irPara(aba) {
 }
 
 function renderProvas() {
-  $('#prova-sel').innerHTML = S.provas.map(p => `<option value="${p.id}" ${p.id === S.atual ? 'selected' : ''}>${esc(p.nome || 'Sem nome')}</option>`).join('');
+  const opts = S.provas.map(p => `<option value="${p.id}" ${p.id === S.atual ? 'selected' : ''}>${esc(p.nome || 'Sem nome')}</option>`).join('');
+  $('#prova-sel').innerHTML = opts;
+  $('#c-prova').innerHTML = opts;
+  renderConferirGabarito();
+}
+// Mostra na aba Corrigir o gabarito da prova escolhida, para o professor conferir antes de ler as folhas
+function renderConferirGabarito() {
+  const p = prova();
+  if (!p || p.local) { $('#c-gabarito').innerHTML = '<span class="falta">Nenhuma prova cadastrada.</span>'; return; }
+  const faltam = p.gab.filter((g, i) => g < 0 && !p.anul[i]).length;
+  $('#c-gabarito').innerHTML = `
+    <span class="titulo">Gabarito de ${esc(p.nome)} · ${p.n} questões · ${MODELOS[p.modelo || 'padrao']}</span>
+    <div class="resps">${p.gab.map((g, i) => `<span>${String(i + 1).padStart(2, '0')}-<b>${p.anul[i] ? 'anulada' : g >= 0 ? LETRAS[g] : '?'}</b></span>`).join('')}</div>
+    ${faltam ? `<span class="falta">${faltam === 1 ? 'Falta 1 resposta' : `Faltam ${faltam} respostas`} no gabarito. Peça ao coordenador para completar.</span>` : ''}`;
 }
 
 function renderGabarito() {
@@ -797,6 +810,7 @@ function renderGabarito() {
   renderGabStatus();
 }
 function renderGabStatus() {
+  renderConferirGabarito();
   const p = prova();
   const faltam = p.gab.filter((g, i) => g < 0 && !p.anul[i]).length;
   $('#gab-status').innerHTML = faltam
@@ -952,7 +966,9 @@ function tsv() {
 
 /* ---------- Eventos ---------- */
 document.querySelectorAll('nav.steps button').forEach(b => b.addEventListener('click', () => irPara(b.dataset.aba)));
-$('#prova-sel').addEventListener('change', e => { S.atual = e.target.value; erros.length = 0; save(); renderGabarito(); irPara(S.aba); });
+const trocarProva = id => { S.atual = id; erros.length = 0; save(); renderProvas(); renderGabarito(); irPara(S.aba); };
+$('#prova-sel').addEventListener('change', e => trocarProva(e.target.value));
+$('#c-prova').addEventListener('change', e => trocarProva(e.target.value));
 $('#nova').addEventListener('click', () => {
   const p = novaProva(`Nova prova ${S.provas.length + 1}`, 20, 5, 10);
   S.provas.push(p); S.atual = p.id; save(); renderProvas(); renderGabarito(); irPara('gabarito');

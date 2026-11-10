@@ -133,7 +133,11 @@
         <h2>Corrigir</h2>
         <p class="lead">Aponte a câmera para o gabarito e o app corrige sozinho, uma folha atrás da outra. Também dá para tirar foto ou enviar fotos prontas. Tudo acontece no seu aparelho: nenhuma imagem sai dele.</p>
       </div>
-      <div class="turma-pick"><label for="c-turma">Turma destas folhas</label><select id="c-turma" data-turma-sel></select></div>
+      <div class="escolha-correcao">
+        <div class="field"><label for="c-prova">1. Prova</label><select id="c-prova"></select></div>
+        <div class="field"><label for="c-turma">2. Turma</label><select id="c-turma" data-turma-sel></select></div>
+      </div>
+      <div class="gab-conferir" id="c-gabarito"></div>
       <div class="actions">
         <button class="btn primary" id="cam-abrir">Ler pela câmera</button>
         <label class="btn" for="foto-cam">Tirar foto<input type="file" id="foto-cam" accept="image/*" capture="environment" class="sr-only"></label>

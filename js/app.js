@@ -17,7 +17,8 @@ function novaProva(nome, n = 20, k = 5, valor = 10) {
 // Turmas, provas e resultados ficam na escola (Firebase). Neste aparelho ficam só as preferências
 // de quem usa: aba aberta, prova e turma escolhidas. KEY guarda dados de versões antigas, que o
 // coordenador pode levar para a escola.
-const PREFS = ['atual', 'aba', 'turmaAtual', 'turmaEdit', 'turmaFiltro'];
+// O filtro de turma dos Resultados não fica salvo: toda vez começa em "Todas as turmas"
+const PREFS = ['atual', 'aba', 'turmaAtual', 'turmaEdit'];
 const prefsKey = () => `corretor-gabaritos.prefs.${nuvem.eid || 'sem-escola'}`;
 const nuvem = { eid: null, escolaNome: '', papel: null, conhecido: { provas: new Map(), turmas: new Map(), resultados: new Map() }, parar: [], timer: 0, carregou: new Set() };
 const ehCoord = () => nuvem.papel === 'coordenador';
@@ -423,10 +424,35 @@ function lerFolha(src, p) {
     const v = amostra(H, G.ori.x, G.ori.y, G.ori.s * 0.3);
     if (!melhor || v > melhor.v) melhor = { H, v };
   }
-  if (!melhor || melhor.v < 0.5) return falha('Não reconheci esta folha. Use a folha gerada na etapa 2, com os quatro cantos visíveis.');
+  if (!melhor || melhor.v < 0.5) return falha('Não reconheci esta folha. Use a folha gerada na etapa 3, com os quatro cantos visíveis.');
   const H = melhor.H;
 
   const L = layout(p), rr = L.R * 0.68;
+  // A folha precisa ser do mesmo modelo da prova escolhida: confere o formato do quadro e se as
+  // bolinhas impressas estão onde a prova espera. Sem isso, uma folha de outra prova vira "tudo em branco".
+  const cantoImg = G.fid.map(([x, y]) => mapa(H, x, y));
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const largura = (dist(cantoImg[0], cantoImg[1]) + dist(cantoImg[3], cantoImg[2])) / 2;
+  const altura = (dist(cantoImg[0], cantoImg[3]) + dist(cantoImg[1], cantoImg[2])) / 2;
+  const formatoEsperado = (G.fid[1][0] - G.fid[0][0]) / (G.fid[3][1] - G.fid[0][1]);
+  const contorno = (x, y) => {
+    let esc = 0;
+    for (let a = 0; a < 16; a++) {
+      const ang = a * Math.PI / 8;
+      const tocou = [0.88, 1, 1.12].some(f => {
+        const [u, v] = mapa(H, x + Math.cos(ang) * L.R * f, y + Math.sin(ang) * L.R * f);
+        const ix = Math.round(u), iy = Math.round(v);
+        return ix >= 0 && iy >= 0 && ix < w && iy < h && dark[iy * w + ix];
+      });
+      if (tocou) esc++;
+    }
+    return esc / 16;
+  };
+  const bolinhas = L.qs.flatMap(q => q.b);
+  const contornoMedio = bolinhas.reduce((s, b) => s + contorno(b.x, b.y), 0) / bolinhas.length;
+  if (Math.abs(largura / altura / formatoEsperado - 1) > 0.2 || contornoMedio < 0.45) {
+    return falha(`Esta folha não é da prova "${p.nome}". Confira se escolheu a prova certa no topo da página.`);
+  }
   const decidir = f => {
     const mx = Math.max(...f);
     if (mx < 0.3) return { r: -1, duvida: mx > 0.2 };
@@ -550,11 +576,18 @@ async function carregarImagem(file) {
 }
 function registrar(leitura, p, extra = {}) {
   if (!leitura.ok) { erros.unshift({ id: uid(), nome: extra.arquivo || 'Foto', erro: leitura.erro }); return null; }
-  const r = { id: uid(), corretor: Nuvem.email(), corretorNome: Nuvem.nome(), turmaId: S.turmaAtual || null, num: leitura.num, nome: extra.nome || '', resp: leitura.resp, duvidas: leitura.duvidas, exemplo: !!extra.exemplo, quando: Date.now(), versao: p.versao };
+  const turmaId = S.turmaAtual || null;
+  // Mesmo aluno (Nº na chamada) da mesma turma nesta prova: a leitura nova substitui a anterior em vez de duplicar
+  const anterior = leitura.num != null && !extra.exemplo
+    ? resultados().find(x => !x.exemplo && x.num === leitura.num && (x.turmaId || null) === turmaId && x.corretor === Nuvem.email())
+    : null;
+  const r = anterior || { id: uid(), corretor: Nuvem.email(), corretorNome: Nuvem.nome(), turmaId, num: leitura.num, nome: extra.nome || '', exemplo: !!extra.exemplo };
+  Object.assign(r, { resp: leitura.resp, duvidas: leitura.duvidas, quando: Date.now(), versao: p.versao });
   const base = document.createElement('canvas'); base.width = leitura.cv.width; base.height = leitura.cv.height;
   base.getContext('2d').drawImage(leitura.cv, 0, 0);
   sessao.set(r.id, { base, H: leitura.H });
-  resultados().unshift(r);
+  if (anterior) { r.substituiu = true; S.res[S.atual] = [r, ...resultados().filter(x => x !== r)]; }
+  else resultados().unshift(r);
   save();
   return r;
 }
@@ -622,7 +655,7 @@ async function abrirCamera() {
   const v = $('#cam-video');
   v.srcObject = cam.stream;
   try { await v.play(); } catch (e) {}
-  Object.assign(cam, { ativo: true, chave: null, iguais: 0, aceita: null, lidas: 0, ultimoId: null });
+  Object.assign(cam, { ativo: true, chave: null, iguais: 0, aceita: null, aceitaNum: null, lidas: 0, ultimoId: null });
   camContar();
   try { cam.wake = await navigator.wakeLock?.request('screen'); } catch (e) { cam.wake = null; }
   camStatus('Aponte para o gabarito, com os 4 quadrados pretos na tela');
@@ -648,7 +681,7 @@ function camLaco() {
     camGuia(l, p);
     if (l.ok) camAvaliar(l, p);
     else {
-      cam.chave = null; cam.iguais = 0; cam.aceita = null;
+      cam.chave = null; cam.iguais = 0; cam.aceita = null; cam.aceitaNum = null;
       camStatus('Aponte para o gabarito, com os 4 quadrados pretos na tela');
     }
   }
@@ -672,10 +705,12 @@ function camAvaliar(l, p) {
   const chave = JSON.stringify([l.num, l.resp]);
   if (chave === cam.chave) cam.iguais++; else { cam.chave = chave; cam.iguais = 1; }
   if (cam.iguais < CAM_QUADROS_IGUAIS) { camStatus('Gabarito encontrado. Segure firme…'); return; }
-  if (chave === cam.aceita) { camStatus('Folha lida. Passe para a próxima.'); return; }
+  // A mesma folha continua na frente da câmera (mesma leitura ou mesmo Nº): não registra de novo
+  if (chave === cam.aceita || (l.num != null && l.num === cam.aceitaNum)) { camStatus('Folha lida. Passe para a próxima.'); return; }
   const r = registrar(l, p);
   if (!r) return;
-  cam.aceita = chave; cam.lidas++; cam.ultimoId = r.id;
+  cam.aceita = chave; cam.aceitaNum = l.num; cam.ultimoId = r.id;
+  if (!r.substituiu) cam.lidas++;
   camContar(); camBip();
   try { navigator.vibrate?.(120); } catch (e) {}
   camStatus('Folha lida. Passe para a próxima.');
@@ -714,7 +749,7 @@ $('#cam').addEventListener('click', e => {
   if (e.target.id !== 'cam-desfazer' || !cam.ultimoId) return;
   S.res[S.atual] = resultados().filter(x => x.id !== cam.ultimoId);
   sessao.delete(cam.ultimoId); save();
-  cam.ultimoId = null; cam.aceita = null; cam.lidas = Math.max(0, cam.lidas - 1); camContar();
+  cam.ultimoId = null; cam.aceita = null; cam.aceitaNum = null; cam.lidas = Math.max(0, cam.lidas - 1); camContar();
   $('#cam-res').hidden = true; camStatus('Leitura desfeita. Aponte de novo para a folha.');
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && cam.ativo) fecharCamera(); });
@@ -1089,7 +1124,7 @@ $('#imp-aplicar').addEventListener('click', () => {
   renderTurmas(); renderSeletoresTurma();
   toast([novas && `${novas} ${novas === 1 ? 'turma criada' : 'turmas criadas'}`, atualizadas && `${atualizadas} ${atualizadas === 1 ? 'atualizada' : 'atualizadas'}`].filter(Boolean).join(', '));
 });
-$('#c-turma').addEventListener('change', e => { S.turmaAtual = e.target.value || null; S.turmaFiltro = e.target.value; save(); });
+$('#c-turma').addEventListener('change', e => { S.turmaAtual = e.target.value || null; save(); });
 $('#r-turma').addEventListener('change', e => { S.turmaFiltro = e.target.value; save(); renderResultados(); });
 
 $('#copiar').addEventListener('click', async () => {

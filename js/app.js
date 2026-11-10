@@ -67,7 +67,16 @@ function sincronizar() {
       if (conhecido.get(item.id) === j || !podeGravar[col](item)) continue;
       conhecido.set(item.id, j);
       const { id, ...dados } = limpo(item);
-      Nuvem.colecao(nuvem.eid, col).doc(id).set(dados).catch(falhaGravar);
+      Nuvem.colecao(nuvem.eid, col).doc(id).set(dados).catch(e => {
+        // Folha que outro professor já corrigiu: o banco recusa; tira a leitura daqui e avisa
+        if (col === 'resultados' && e?.code === 'permission-denied') {
+          Object.keys(S.res).forEach(k => { S.res[k] = S.res[k].filter(x => x.id !== id); });
+          conhecido.delete(id); sessao.delete(id);
+          erros.unshift({ id: uid(), nome: 'Folha repetida', erro: `A prova do Nº ${String(item.num ?? '').padStart(2, '0')} já tinha sido corrigida por outro professor. A leitura nova não foi salva.` });
+          toast('Esta prova já tinha sido corrigida por outro professor.');
+          renderCorrigir(); renderResultados();
+        } else falhaGravar(e);
+      });
     }
     for (const [id, j] of [...conhecido]) {
       if (vistos.has(id)) continue;
@@ -577,17 +586,26 @@ async function carregarImagem(file) {
 function registrar(leitura, p, extra = {}) {
   if (!leitura.ok) { erros.unshift({ id: uid(), nome: extra.arquivo || 'Foto', erro: leitura.erro }); return null; }
   const turmaId = S.turmaAtual || null;
-  // Mesmo aluno (Nº na chamada) da mesma turma nesta prova: a leitura nova substitui a anterior em vez de duplicar
-  const anterior = leitura.num != null && !extra.exemplo
-    ? resultados().find(x => !x.exemplo && x.num === leitura.num && (x.turmaId || null) === turmaId && x.corretor === Nuvem.email())
-    : null;
-  const r = anterior || { id: uid(), corretor: Nuvem.email(), corretorNome: Nuvem.nome(), turmaId, num: leitura.num, nome: extra.nome || '', exemplo: !!extra.exemplo };
-  Object.assign(r, { resp: leitura.resp, duvidas: leitura.duvidas, quando: Date.now(), versao: p.versao });
+  registrar.aviso = '';
+  // Cada folha é única por prova + turma + Nº na chamada: se já foi corrigida, a nova leitura é recusada.
+  // Para corrigir de novo, é preciso remover a leitura antiga nos Resultados.
+  if (leitura.num != null && !extra.exemplo) {
+    const ja = resultados().find(x => !x.exemplo && x.num === leitura.num && (x.turmaId || null) === turmaId);
+    if (ja) {
+      const quem = nomeDe(ja);
+      registrar.aviso = `Esta prova já foi corrigida: Nº ${String(ja.num).padStart(2, '0')}${quem ? ' · ' + quem : ''}. Para corrigir de novo, remova a correção antiga nos Resultados.`;
+      erros.unshift({ id: uid(), nome: extra.arquivo || 'Folha repetida', erro: registrar.aviso });
+      return null;
+    }
+  }
+  // Com o Nº lido, o id é fixo (prova_turma_Nº): o banco recusa uma segunda folha do mesmo aluno, mesmo de outro professor
+  const id = leitura.num != null && !extra.exemplo ? `${S.atual}_${turmaId || 'sem-turma'}_${leitura.num}` : uid();
+  const r = { id, corretor: Nuvem.email(), corretorNome: Nuvem.nome(), turmaId, num: leitura.num, nome: extra.nome || '', exemplo: !!extra.exemplo,
+    resp: leitura.resp, duvidas: leitura.duvidas, quando: Date.now(), versao: p.versao };
   const base = document.createElement('canvas'); base.width = leitura.cv.width; base.height = leitura.cv.height;
   base.getContext('2d').drawImage(leitura.cv, 0, 0);
   sessao.set(r.id, { base, H: leitura.H });
-  if (anterior) { r.substituiu = true; S.res[S.atual] = [r, ...resultados().filter(x => x !== r)]; }
-  else resultados().unshift(r);
+  resultados().unshift(r);
   save();
   return r;
 }
@@ -708,9 +726,16 @@ function camAvaliar(l, p) {
   // A mesma folha continua na frente da câmera (mesma leitura ou mesmo Nº): não registra de novo
   if (chave === cam.aceita || (l.num != null && l.num === cam.aceitaNum)) { camStatus('Folha lida. Passe para a próxima.'); return; }
   const r = registrar(l, p);
-  if (!r) return;
+  if (!r) {
+    // Folha já corrigida: avisa uma vez e espera a próxima folha
+    cam.aceita = chave; cam.aceitaNum = l.num; cam.ultimoId = null;
+    camStatus('Esta prova já foi corrigida. Passe para a próxima.');
+    $('#cam-res').innerHTML = `<p class="notice">${esc(registrar.aviso)}</p>`; $('#cam-res').hidden = false;
+    try { navigator.vibrate?.([80, 60, 80]); } catch (e) {}
+    return;
+  }
   cam.aceita = chave; cam.aceitaNum = l.num; cam.ultimoId = r.id;
-  if (!r.substituiu) cam.lidas++;
+  cam.lidas++;
   camContar(); camBip();
   try { navigator.vibrate?.(120); } catch (e) {}
   camStatus('Folha lida. Passe para a próxima.');
@@ -938,13 +963,14 @@ function renderResultados() {
       <div class="stat"><div class="v">${aprov}/${rs.length}</div><div class="l">Com 60% ou mais</div></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Nº</th><th>Aluno</th><th>Acertos</th><th>Nota</th><th>Situação</th></tr></thead>
+      <thead><tr><th>Nº</th><th>Aluno</th><th>Acertos</th><th>Nota</th><th>Situação</th><th><span class="sr-only">Remover</span></th></tr></thead>
       <tbody>${ordem.map(({ r, c }) => `<tr>
         <td class="num">${r.num ?? '–'}${rep.has(r.num) ? ' <span class="chip warn">repetido</span>' : ''}</td>
         <td><label class="sr-only" for="t-${r.id}">Nome</label><input type="text" id="t-${r.id}" data-nome="${r.id}" value="${esc(nomeDe(r))}" placeholder="Nome do aluno"> ${r.exemplo ? '<span class="tag-ex">Exemplo</span>' : ''}</td>
         <td class="num">${c.ac}/${p.n}</td>
         <td class="num"><strong>${fmt(c.nota)}</strong></td>
         <td>${c.br || c.mu ? `<span class="chip warn">${[c.br ? c.br + ' em branco' : '', c.mu ? c.mu + ' c/ 2 marcas' : ''].filter(Boolean).join(' · ')}</span>` : '<span class="chip">ok</span>'}</td>
+        <td>${ehCoord() || r.corretor === Nuvem.email() ? `<button class="btn small danger" data-remover-res="${r.id}" title="Remove esta correção para poder corrigir a prova de novo">Remover</button>` : ''}</td>
       </tr>`).join('')}</tbody>
     </table></div>
     <div style="display:grid;gap:12px">
@@ -1143,6 +1169,15 @@ $('#imp-aplicar').addEventListener('click', () => {
 $('#c-turma').addEventListener('change', e => { S.turmaAtual = e.target.value || null; save(); });
 $('#r-turma').addEventListener('change', e => { S.turmaFiltro = e.target.value; save(); renderResultados(); });
 
+$('#res-body').addEventListener('click', e => {
+  const b = e.target.closest('[data-remover-res]'); if (!b) return;
+  armar(b, 'Confirmar', () => {
+    const id = b.dataset.removerRes;
+    S.res[S.atual] = resultados().filter(x => x.id !== id); sessao.delete(id);
+    save(); renderResultados(); renderCorrigir();
+    toast('Correção removida. A prova pode ser corrigida de novo.');
+  });
+});
 $('#copiar').addEventListener('click', async () => {
   const texto = tsv();
   try { await navigator.clipboard.writeText(texto); toast('Copiado. Cole no Excel ou no Google Planilhas.'); }

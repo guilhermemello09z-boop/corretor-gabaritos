@@ -172,6 +172,8 @@ function corrigir(p, resp) {
 const RUBRICA_MAX = 2;
 const precisaRubrica = (p, c) => c.nota < p.valor * 0.6;
 const notaFinal = (p, r, c = corrigir(p, r.resp)) => Math.min(p.valor, c.nota + (precisaRubrica(p, c) ? Number(r.rubrica) || 0 : 0));
+// Aprovado: nota final 6 ou mais (60% do valor da prova); abaixo disso fica com pendência
+const aprovado = (p, nota) => nota >= p.valor * 0.6 - 1e-9;
 
 /* ---------- Geometria da folha (unidades da folha: A4 a 150 dpi) ---------- */
 const SW = 1240, SH = 1754, FS = 80;
@@ -935,7 +937,7 @@ function renderCorrigir() {
     html += `<div class="card salvas"><div class="card-body">
       <h3>Já corrigidas e salvas nesta turma (${salvas.length})</h3>
       <p class="muted">Estas correções estão guardadas na escola e não somem ao atualizar a página. A foto da leitura só aparece logo depois de corrigir; as notas completas ficam na aba Resultados.</p>
-      <div class="chips">${salvas.map(r => `<span class="chip ok">${r.num != null ? String(r.num).padStart(2, '0') : '–'} · ${esc(nomeDe(r) || 'sem nome')} · ${fmt(notaFinal(p, r))}</span>`).join('')}</div>
+      <div class="chips">${salvas.map(r => `<span class="chip ${aprovado(p, notaFinal(p, r)) ? 'ok' : 'bad'}">${r.num != null ? String(r.num).padStart(2, '0') : '–'} · ${esc(nomeDe(r) || 'sem nome')} · ${fmt(notaFinal(p, r))}</span>`).join('')}</div>
     </div></div>`;
   }
   box.innerHTML = html || '';
@@ -989,7 +991,9 @@ function renderResultados() {
           : ehCoord() || r.corretor === Nuvem.email()
             ? `<label class="sr-only" for="rb-${r.id}">Rubrica de ${esc(nomeDe(r) || 'aluno')}</label><input type="number" class="rubrica" id="rb-${r.id}" data-rubrica="${r.id}" min="0" max="${RUBRICA_MAX}" step="0.5" value="${r.rubrica ?? ''}" placeholder="0">`
             : fmt(Number(r.rubrica) || 0)}</td>
-        <td class="num"><strong data-final="${r.id}">${fmt(notaFinal(p, r, c))}</strong></td>
+        <td class="num">${(() => { const nf = notaFinal(p, r, c); return aprovado(p, nf)
+          ? `<strong class="nota-final ok" title="Aprovado">${fmt(nf)}</strong>`
+          : `<strong class="nota-final pend" title="Com pendência">${fmt(nf)}</strong> <span class="pend-txt">Pendência</span>`; })()}</td>
         <td>${c.br || c.mu ? `<span class="chip warn">${[c.br ? c.br + ' em branco' : '', c.mu ? c.mu + ' c/ 2 marcas' : ''].filter(Boolean).join(' · ')}</span>` : '<span class="chip">ok</span>'}</td>
         <td>${ehCoord() || r.corretor === Nuvem.email() ? `<button class="btn small danger" data-remover-res="${r.id}" title="Remove esta correção para poder corrigir a prova de novo">Remover</button>` : ''}</td>
       </tr>`).join('')}</tbody>
@@ -1004,10 +1008,10 @@ function renderResultados() {
 // Linhas da planilha de resultados (prova e turma escolhidas): uma linha por aluno, em ordem de turma e Nº
 function linhasPlanilha() {
   const p = prova(), coord = ehCoord();
-  const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota da prova', 'Rubrica', 'Nota final', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
+  const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota da prova', 'Rubrica', 'Nota final', 'Situação', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
   [...filtrados()].sort((a, b) => (turmaPorId(a.turmaId)?.nome || '').localeCompare(turmaPorId(b.turmaId)?.nome || '') || (a.num ?? 999) - (b.num ?? 999)).forEach(r => {
     const c = corrigir(p, r.resp);
-    linhas.push([turmaPorId(r.turmaId)?.nome || '', r.num ?? '', nomeDe(r), c.ac, fmt(c.nota), precisaRubrica(p, c) ? fmt(Number(r.rubrica) || 0) : '', fmt(notaFinal(p, r, c)),
+    linhas.push([turmaPorId(r.turmaId)?.nome || '', r.num ?? '', nomeDe(r), c.ac, fmt(c.nota), precisaRubrica(p, c) ? fmt(Number(r.rubrica) || 0) : '', fmt(notaFinal(p, r, c)), aprovado(p, notaFinal(p, r, c)) ? 'Aprovado' : 'Pendência',
       ...(coord ? [r.corretorNome || r.corretor || ''] : []),
       ...Array.from({ length: p.n }, (_, q) => { const x = r.resp[q] ?? -1; return x >= 0 ? LETRAS[x] : x === -2 ? '*' : ''; })]);
   });

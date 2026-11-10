@@ -922,6 +922,16 @@ function renderCorrigir() {
   const lidas = resultados().filter(r => sessao.has(r.id));
   let html = erros.map(e => `<div class="card err"><div class="card-body"><h3>${esc(e.nome)}</h3><p>${esc(e.erro)}</p></div></div>`).join('');
   html += lidas.map(r => `<article class="card" data-card="${r.id}">${cardHTML(r, p)}</article>`).join('');
+  // Correções já guardadas na escola desta prova e turma (a foto só existe logo após a leitura; a nota fica salva)
+  const salvas = resultados().filter(r => !r.exemplo && !sessao.has(r.id) && (r.turmaId || null) === (S.turmaAtual || null))
+    .sort((a, b) => (a.num ?? 999) - (b.num ?? 999));
+  if (salvas.length) {
+    html += `<div class="card salvas"><div class="card-body">
+      <h3>Já corrigidas e salvas nesta turma (${salvas.length})</h3>
+      <p class="muted">Estas correções estão guardadas na escola e não somem ao atualizar a página. A foto da leitura só aparece logo depois de corrigir; as notas completas ficam na aba Resultados.</p>
+      <div class="chips">${salvas.map(r => `<span class="chip ok">${r.num != null ? String(r.num).padStart(2, '0') : '–'} · ${esc(nomeDe(r) || 'sem nome')} · ${fmt(corrigir(p, r.resp).nota)}</span>`).join('')}</div>
+    </div></div>`;
+  }
   box.innerHTML = html || '';
   lidas.forEach(r => desenharLeitura(box.querySelector(`[data-ov="${r.id}"]`), sessao.get(r.id), r, p));
 }
@@ -1166,7 +1176,7 @@ $('#imp-aplicar').addEventListener('click', () => {
   renderTurmas(); renderSeletoresTurma();
   toast([novas && `${novas} ${novas === 1 ? 'turma criada' : 'turmas criadas'}`, atualizadas && `${atualizadas} ${atualizadas === 1 ? 'atualizada' : 'atualizadas'}`].filter(Boolean).join(', '));
 });
-$('#c-turma').addEventListener('change', e => { S.turmaAtual = e.target.value || null; save(); });
+$('#c-turma').addEventListener('change', e => { S.turmaAtual = e.target.value || null; save(); renderCorrigir(); });
 $('#r-turma').addEventListener('change', e => { S.turmaFiltro = e.target.value; save(); renderResultados(); });
 
 $('#res-body').addEventListener('click', e => {

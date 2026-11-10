@@ -114,6 +114,10 @@ input:focus-visible, select:focus-visible, button:focus-visible, label.btn:focus
 .card canvas { width: 100%; max-width: 100%; height: auto; border-radius: 6px; background: #fff; }
 .card.err { grid-template-columns: 1fr; border-color: var(--bad); }
 input.rubrica { width: 76px; text-align: center; }
+.nota-final { display: inline-block; min-width: 3.2em; padding: 3px 10px; border-radius: 999px; text-align: center; }
+.nota-final.ok { background: var(--ok-weak); color: var(--ok); }
+.nota-final.pend { background: var(--bad-weak); color: var(--bad); }
+.pend-txt { font-size: 0.75rem; font-weight: 700; color: var(--bad); text-transform: uppercase; letter-spacing: 0.04em; }
 .card.salvas { grid-template-columns: 1fr; border-color: var(--ok); }
 .card-body { display: grid; gap: 14px; align-content: start; min-width: 0; }
 .card-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }

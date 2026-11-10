@@ -990,14 +990,31 @@ function renderResultados() {
     ${faltamHTML}`;
 }
 
-function tsv() {
-  const p = prova();
-  const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota', ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))].join('\t')];
+// Linhas da planilha de resultados (prova e turma escolhidas): uma linha por aluno, em ordem de turma e Nº
+function linhasPlanilha() {
+  const p = prova(), coord = ehCoord();
+  const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
   [...filtrados()].sort((a, b) => (turmaPorId(a.turmaId)?.nome || '').localeCompare(turmaPorId(b.turmaId)?.nome || '') || (a.num ?? 999) - (b.num ?? 999)).forEach(r => {
     const c = corrigir(p, r.resp);
-    linhas.push([turmaPorId(r.turmaId)?.nome || '', r.num ?? '', nomeDe(r), c.ac, fmt(c.nota), ...r.resp.map(x => (x >= 0 ? LETRAS[x] : x === -2 ? '*' : ''))].join('\t'));
+    linhas.push([turmaPorId(r.turmaId)?.nome || '', r.num ?? '', nomeDe(r), c.ac, fmt(c.nota), ...(coord ? [r.corretorNome || r.corretor || ''] : []),
+      ...Array.from({ length: p.n }, (_, q) => { const x = r.resp[q] ?? -1; return x >= 0 ? LETRAS[x] : x === -2 ? '*' : ''; })]);
   });
-  return linhas.join('\n');
+  return linhas;
+}
+const tsv = () => linhasPlanilha().map(l => l.join('\t')).join('\n');
+// Arquivo .csv no formato do Excel brasileiro (separador ";" e acentos em UTF-8), que também abre no Google Planilhas
+function baixarPlanilha() {
+  if (!filtrados().length) { toast('Ainda não há provas corrigidas para baixar.'); return; }
+  const cel = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const csv = '﻿' + linhasPlanilha().map(l => l.map(cel).join(';')).join('\r\n');
+  const t = turmaPorId(S.turmaFiltro);
+  const nome = `Notas - ${prova().nome}${t ? ' - ' + t.nome : ''}`.replace(/[\\/:*?"<>|]+/g, '-').slice(0, 120) + '.csv';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = nome;
+  document.body.append(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  toast('Planilha baixada. Abra o arquivo no Excel ou no Google Planilhas.');
 }
 
 /* ---------- Eventos ---------- */
@@ -1188,6 +1205,7 @@ $('#res-body').addEventListener('click', e => {
     toast('Correção removida. A prova pode ser corrigida de novo.');
   });
 });
+$('#baixar').addEventListener('click', baixarPlanilha);
 $('#copiar').addEventListener('click', async () => {
   const texto = tsv();
   try { await navigator.clipboard.writeText(texto); toast('Copiado. Cole no Excel ou no Google Planilhas.'); }

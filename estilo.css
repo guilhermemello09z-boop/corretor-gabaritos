@@ -113,6 +113,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, label.btn:focus
 @media (max-width: 720px) { .card { grid-template-columns: 1fr; } }
 .card canvas { width: 100%; max-width: 100%; height: auto; border-radius: 6px; background: #fff; }
 .card.err { grid-template-columns: 1fr; border-color: var(--bad); }
+input.rubrica { width: 76px; text-align: center; }
 .card.salvas { grid-template-columns: 1fr; border-color: var(--ok); }
 .card-body { display: grid; gap: 14px; align-content: start; min-width: 0; }
 .card-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }

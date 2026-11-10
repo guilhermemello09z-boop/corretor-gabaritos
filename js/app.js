@@ -167,6 +167,12 @@ function corrigir(p, resp) {
   return { ac, br, mu, er, det, nota: p.n ? ac / p.n * p.valor : 0 };
 }
 
+// Rubrica: aluno com nota abaixo de 6 (60% do valor da prova) pode receber de 0 a 2 pontos.
+// A nota final é a nota da prova mais a rubrica, sem passar do valor da prova.
+const RUBRICA_MAX = 2;
+const precisaRubrica = (p, c) => c.nota < p.valor * 0.6;
+const notaFinal = (p, r, c = corrigir(p, r.resp)) => Math.min(p.valor, c.nota + (precisaRubrica(p, c) ? Number(r.rubrica) || 0 : 0));
+
 /* ---------- Geometria da folha (unidades da folha: A4 a 150 dpi) ---------- */
 const SW = 1240, SH = 1754, FS = 80;
 const FID = [[70, 70], [1170, 70], [1170, 1684], [70, 1684]];
@@ -929,7 +935,7 @@ function renderCorrigir() {
     html += `<div class="card salvas"><div class="card-body">
       <h3>Já corrigidas e salvas nesta turma (${salvas.length})</h3>
       <p class="muted">Estas correções estão guardadas na escola e não somem ao atualizar a página. A foto da leitura só aparece logo depois de corrigir; as notas completas ficam na aba Resultados.</p>
-      <div class="chips">${salvas.map(r => `<span class="chip ok">${r.num != null ? String(r.num).padStart(2, '0') : '–'} · ${esc(nomeDe(r) || 'sem nome')} · ${fmt(corrigir(p, r.resp).nota)}</span>`).join('')}</div>
+      <div class="chips">${salvas.map(r => `<span class="chip ok">${r.num != null ? String(r.num).padStart(2, '0') : '–'} · ${esc(nomeDe(r) || 'sem nome')} · ${fmt(notaFinal(p, r))}</span>`).join('')}</div>
     </div></div>`;
   }
   box.innerHTML = html || '';
@@ -958,7 +964,7 @@ function renderResultados() {
   const faltamHTML = t && t.alunos.length ? `<div style="display:grid;gap:8px"><h3>${faltam.length ? `Faltam corrigir (${faltam.length})` : 'Todos os alunos da turma foram corrigidos'}</h3>${faltam.length ? `<div class="chips">${faltam.map(a => `<span class="chip">${String(a.num).padStart(2, '0')} · ${esc(a.nome)}</span>`).join('')}</div>` : ''}</div>` : '';
   if (!rs.length) { $('#res-body').innerHTML = `<div class="empty">Nenhuma folha corrigida ${t ? 'desta turma' : ''} ainda. Envie fotos na etapa 4.</div>${faltamHTML}`; return; }
   const cs = rs.map(r => corrigir(p, r.resp));
-  const notas = cs.map(c => c.nota);
+  const notas = rs.map((r, i) => notaFinal(p, r, cs[i]));
   const media = notas.reduce((a, b) => a + b, 0) / notas.length;
   const aprov = notas.filter(n => n >= p.valor * 0.6).length;
   const ordem = rs.map((r, i) => ({ r, c: cs[i] })).sort((a, b) => (a.r.num ?? 999) - (b.r.num ?? 999));
@@ -973,12 +979,17 @@ function renderResultados() {
       <div class="stat"><div class="v">${aprov}/${rs.length}</div><div class="l">Com 60% ou mais</div></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Nº</th><th>Aluno</th><th>Acertos</th><th>Nota</th><th>Situação</th><th><span class="sr-only">Remover</span></th></tr></thead>
+      <thead><tr><th>Nº</th><th>Aluno</th><th>Acertos</th><th>Nota da prova</th><th>Rubrica (0 a ${RUBRICA_MAX})</th><th>Nota final</th><th>Situação</th><th><span class="sr-only">Remover</span></th></tr></thead>
       <tbody>${ordem.map(({ r, c }) => `<tr>
         <td class="num">${r.num ?? '–'}${rep.has(r.num) ? ' <span class="chip warn">repetido</span>' : ''}</td>
         <td><label class="sr-only" for="t-${r.id}">Nome</label><input type="text" id="t-${r.id}" data-nome="${r.id}" value="${esc(nomeDe(r))}" placeholder="Nome do aluno"> ${r.exemplo ? '<span class="tag-ex">Exemplo</span>' : ''}</td>
         <td class="num">${c.ac}/${p.n}</td>
-        <td class="num"><strong>${fmt(c.nota)}</strong></td>
+        <td class="num">${fmt(c.nota)}</td>
+        <td class="num">${!precisaRubrica(p, c) ? '<span class="muted">—</span>'
+          : ehCoord() || r.corretor === Nuvem.email()
+            ? `<label class="sr-only" for="rb-${r.id}">Rubrica de ${esc(nomeDe(r) || 'aluno')}</label><input type="number" class="rubrica" id="rb-${r.id}" data-rubrica="${r.id}" min="0" max="${RUBRICA_MAX}" step="0.5" value="${r.rubrica ?? ''}" placeholder="0">`
+            : fmt(Number(r.rubrica) || 0)}</td>
+        <td class="num"><strong data-final="${r.id}">${fmt(notaFinal(p, r, c))}</strong></td>
         <td>${c.br || c.mu ? `<span class="chip warn">${[c.br ? c.br + ' em branco' : '', c.mu ? c.mu + ' c/ 2 marcas' : ''].filter(Boolean).join(' · ')}</span>` : '<span class="chip">ok</span>'}</td>
         <td>${ehCoord() || r.corretor === Nuvem.email() ? `<button class="btn small danger" data-remover-res="${r.id}" title="Remove esta correção para poder corrigir a prova de novo">Remover</button>` : ''}</td>
       </tr>`).join('')}</tbody>
@@ -993,10 +1004,11 @@ function renderResultados() {
 // Linhas da planilha de resultados (prova e turma escolhidas): uma linha por aluno, em ordem de turma e Nº
 function linhasPlanilha() {
   const p = prova(), coord = ehCoord();
-  const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
+  const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota da prova', 'Rubrica', 'Nota final', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
   [...filtrados()].sort((a, b) => (turmaPorId(a.turmaId)?.nome || '').localeCompare(turmaPorId(b.turmaId)?.nome || '') || (a.num ?? 999) - (b.num ?? 999)).forEach(r => {
     const c = corrigir(p, r.resp);
-    linhas.push([turmaPorId(r.turmaId)?.nome || '', r.num ?? '', nomeDe(r), c.ac, fmt(c.nota), ...(coord ? [r.corretorNome || r.corretor || ''] : []),
+    linhas.push([turmaPorId(r.turmaId)?.nome || '', r.num ?? '', nomeDe(r), c.ac, fmt(c.nota), precisaRubrica(p, c) ? fmt(Number(r.rubrica) || 0) : '', fmt(notaFinal(p, r, c)),
+      ...(coord ? [r.corretorNome || r.corretor || ''] : []),
       ...Array.from({ length: p.n }, (_, q) => { const x = r.resp[q] ?? -1; return x >= 0 ? LETRAS[x] : x === -2 ? '*' : ''; })]);
   });
   return linhas;
@@ -1196,6 +1208,16 @@ $('#imp-aplicar').addEventListener('click', () => {
 $('#c-turma').addEventListener('change', e => { S.turmaAtual = e.target.value || null; save(); renderCorrigir(); });
 $('#r-turma').addEventListener('change', e => { S.turmaFiltro = e.target.value; save(); renderResultados(); });
 
+// Rubrica digitada: limita de 0 a 2, salva na escola e atualiza a nota final da linha
+$('#res-body').addEventListener('change', e => {
+  const id = e.target.dataset.rubrica; if (!id) return;
+  const r = resultados().find(x => x.id === id); if (!r) return;
+  let v = e.target.value === '' ? null : Math.round(parseFloat(e.target.value.replace(',', '.')) * 10) / 10;
+  if (v != null && (isNaN(v) || v < 0)) v = 0;
+  if (v != null && v > RUBRICA_MAX) { v = RUBRICA_MAX; toast(`A rubrica vai de 0 a ${RUBRICA_MAX} pontos.`); }
+  r.rubrica = v; e.target.value = v ?? '';
+  save(); renderResultados();
+});
 $('#res-body').addEventListener('click', e => {
   const b = e.target.closest('[data-remover-res]'); if (!b) return;
   armar(b, 'Confirmar', () => {

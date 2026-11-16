@@ -1,4 +1,6 @@
 (() => {
+// Versão do site, mostrada no topo: ajuda a saber se o celular está com os arquivos novos
+const VERSAO = '16/11 b';
 const LETRAS = 'ABCDE';
 const KEY = 'corretor-gabaritos.v1';
 const S = { provas: [], atual: null, res: {}, aba: 'gabarito' };
@@ -56,7 +58,8 @@ const todosResultados = () => Object.entries(S.res).flatMap(([provaId, lista]) =
 const vistas = { provas: () => S.provas.filter(p => !p.local), turmas: () => S.turmas, resultados: todosResultados };
 // Pode alterar uma correção: o coordenador, quem corrigiu ou o professor responsável pela prova
 const podeMexerResultado = r => ehCoord() || r.corretor === Nuvem.email() || (!!r.responsavel && r.responsavel === Nuvem.email());
-const podeGravar = { provas: ehCoord, turmas: ehCoord, resultados: podeMexerResultado };
+// Correções: qualquer professor pode gravar a rubrica; o banco só deixa quem não corrigiu mudar o campo "rubrica"
+const podeGravar = { provas: ehCoord, turmas: ehCoord, resultados: () => true };
 
 function sincronizar() {
   if (!nuvem.eid) return;
@@ -67,11 +70,19 @@ function sincronizar() {
       vistos.add(item.id);
       const j = canon(limpo(item));
       if (conhecido.get(item.id) === j || !podeGravar[col](item)) continue;
+      const anterior = conhecido.get(item.id);
       conhecido.set(item.id, j);
       const { id, ...dados } = limpo(item);
       Nuvem.colecao(nuvem.eid, col).doc(id).set(dados).catch(e => {
-        // Folha que outro professor já corrigiu: o banco recusa; tira a leitura daqui e avisa
-        if (col === 'resultados' && e?.code === 'permission-denied') {
+        if (col === 'resultados' && e?.code === 'permission-denied' && anterior) {
+          // Alteração que este professor não pode fazer: volta para a versão da escola
+          const k = item.provaId, volta = { ...JSON.parse(anterior) }; delete volta.provaId;
+          if (S.res[k]) S.res[k] = S.res[k].map(x => (x.id === id ? volta : x));
+          conhecido.set(id, anterior);
+          toast('Você não tem permissão para alterar esta correção.');
+          renderResultados();
+        } else if (col === 'resultados' && e?.code === 'permission-denied') {
+          // Folha nova que outro professor já corrigiu: o banco recusa; tira a leitura daqui e avisa
           Object.keys(S.res).forEach(k => { S.res[k] = S.res[k].filter(x => x.id !== id); });
           conhecido.delete(id); sessao.delete(id);
           erros.unshift({ id: uid(), nome: 'Folha repetida', erro: `A prova do Nº ${String(item.num ?? '').padStart(2, '0')} já tinha sido corrigida por outro professor. A leitura nova não foi salva.` });
@@ -1001,11 +1012,11 @@ function renderResultados() {
       <thead><tr><th>Nº</th><th>Aluno</th><th>Acertos</th><th>Nota da prova</th><th>Rubrica (0 a ${RUBRICA_MAX})</th><th>Nota final</th><th>Situação</th><th><span class="sr-only">Remover</span></th></tr></thead>
       <tbody>${ordem.map(({ r, c }) => `<tr>
         <td class="num">${r.num ?? '–'}${rep.has(r.num) ? ' <span class="chip warn">repetido</span>' : ''}</td>
-        <td><label class="sr-only" for="t-${r.id}">Nome</label><input type="text" id="t-${r.id}" data-nome="${r.id}" value="${esc(nomeDe(r))}" placeholder="Nome do aluno"> ${r.exemplo ? '<span class="tag-ex">Exemplo</span>' : ''}</td>
+        <td><label class="sr-only" for="t-${r.id}">Nome</label><input type="text" id="t-${r.id}" data-nome="${r.id}" value="${esc(nomeDe(r))}" placeholder="Nome do aluno"${podeMexerResultado(r) ? '' : ' readonly'}> ${r.exemplo ? '<span class="tag-ex">Exemplo</span>' : ''}</td>
         <td class="num">${c.ac}/${p.n}</td>
         <td class="num">${fmt(c.nota)}</td>
         <td class="num">${!precisaRubrica(p, c) ? '<span class="muted">—</span>'
-          : podeMexerResultado(r)
+          : !r.exemplo
             ? `<label class="sr-only" for="rb-${r.id}">Rubrica de ${esc(nomeDe(r) || 'aluno')}</label><input type="number" class="rubrica" id="rb-${r.id}" data-rubrica="${r.id}" min="0" max="${RUBRICA_MAX}" step="0.5" value="${r.rubrica ?? ''}" placeholder="0">`
             : fmt(Number(r.rubrica) || 0)}</td>
         <td class="num">${(() => { const nf = notaFinal(p, r, c); return aprovado(p, nf)
@@ -1275,7 +1286,8 @@ $('#copiar').addEventListener('click', async () => {
   }
 });
 $('#limpar').addEventListener('click', e => armar(e.currentTarget, 'Confirmar: apagar tudo', () => {
-  const apagar = new Set(filtrados().map(r => r.id));
+  // Só apaga as correções que este professor pode remover
+  const apagar = new Set(filtrados().filter(podeMexerResultado).map(r => r.id));
   S.res[S.atual] = resultados().filter(r => !apagar.has(r.id));
   apagar.forEach(id => sessao.delete(id)); erros.length = 0; save(); renderResultados(); renderCorrigir(); toast('Resultados apagados');
 }));
@@ -1380,7 +1392,7 @@ async function telaEscolas() {
 }
 function mostrarQuemSou() {
   $('#eu-escola').textContent = nuvem.escolaNome;
-  $('#eu-info').textContent = `${Nuvem.email()} · ${PAPEIS[nuvem.papel]}`;
+  $('#eu-info').textContent = `${Nuvem.email()} · ${PAPEIS[nuvem.papel]} · versão ${VERSAO}`;
 }
 function entrarNaEscola(escola, abaInicial) {
   Object.assign(nuvem, { eid: escola.id, escolaNome: escola.nome, papel: escola.papel, membros: [] });

@@ -54,7 +54,10 @@ const limpo = o => JSON.parse(JSON.stringify(o));
 // Folhas de exemplo ficam só neste aparelho e nunca entram nos resultados da escola
 const todosResultados = () => Object.entries(S.res).flatMap(([provaId, lista]) => lista.filter(r => !r.exemplo).map(r => ({ ...r, provaId })));
 const vistas = { provas: () => S.provas.filter(p => !p.local), turmas: () => S.turmas, resultados: todosResultados };
-const podeGravar = { provas: ehCoord, turmas: ehCoord, resultados: r => ehCoord() || r.corretor === Nuvem.email() };
+// Pode alterar uma correção: o coordenador, quem corrigiu ou o professor responsável pela prova
+const ehResponsavel = p => !!p?.responsavel && p.responsavel === Nuvem.email();
+const podeMexerResultado = r => ehCoord() || r.corretor === Nuvem.email() || (!!r.responsavel && r.responsavel === Nuvem.email());
+const podeGravar = { provas: ehCoord, turmas: ehCoord, resultados: podeMexerResultado };
 
 function sincronizar() {
   if (!nuvem.eid) return;
@@ -94,7 +97,18 @@ function falhaGravar(e) {
 }
 function ouvirEscola() {
   nuvem.parar.forEach(f => f()); nuvem.parar = []; nuvem.carregou.clear();
-  const ouvir = (col, consulta, aplicar) => nuvem.parar.push(consulta.onSnapshot(snap => {
+  // Ouve uma ou mais consultas da mesma coleção e trata a união delas como uma lista só
+  // (o professor recebe as correções que ele fez e as das provas em que ele é o responsável)
+  const ouvir = (col, consultas, aplicar) => {
+    consultas = [].concat(consultas);
+    const ultimos = consultas.map(() => null);
+    consultas.forEach((consulta, i) => nuvem.parar.push(consulta.onSnapshot(s => {
+      ultimos[i] = s.docs;
+      if (ultimos.some(x => x === null)) return; // espera todas chegarem a primeira vez
+      const unicos = new Map(); ultimos.flat().forEach(d => unicos.set(d.id, d));
+      processar({ docs: [...unicos.values()] });
+    }, e => toast(e?.code === 'permission-denied' ? 'Sem permissão para ver os dados desta escola.' : 'Sem conexão com a escola.'))));
+    function processar(snap) {
     let itens = snap.docs.map(d => ({ ...d.data(), id: d.id }));
     const primeira = !nuvem.carregou.has(col);
     let pendente = false;
@@ -122,18 +136,20 @@ function ouvirEscola() {
       S.provas = [novaProva('Prova 1')]; S.atual = S.provas[0].id; save();
     }
     renderTudo();
-  }, e => toast(e?.code === 'permission-denied' ? 'Sem permissão para ver os dados desta escola.' : 'Sem conexão com a escola.')));
+    }
+  };
   const eid = nuvem.eid;
   ouvir('provas', Nuvem.colecao(eid, 'provas'), itens => { S.provas = itens.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR', { numeric: true })); });
   ouvir('turmas', Nuvem.colecao(eid, 'turmas'), itens => { S.turmas = itens.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true })); });
-  const qRes = ehCoord() ? Nuvem.colecao(eid, 'resultados') : Nuvem.colecao(eid, 'resultados').where('corretor', '==', Nuvem.email());
+  const colRes = Nuvem.colecao(eid, 'resultados');
+  const qRes = ehCoord() ? colRes : [colRes.where('corretor', '==', Nuvem.email()), colRes.where('responsavel', '==', Nuvem.email())];
   ouvir('resultados', qRes, itens => {
     const exemplos = Object.entries(S.res).flatMap(([provaId, l]) => l.filter(r => r.exemplo).map(r => ({ ...r, provaId })));
     S.res = {};
     itens.concat(exemplos).sort((a, b) => (b.quando || 0) - (a.quando || 0)).forEach(({ provaId, ...r }) => (S.res[provaId] ||= []).push(r));
   });
   if (ehCoord()) {
-    nuvem.parar.push(Nuvem.membros(eid).onSnapshot(snap => { nuvem.membros = snap.docs.map(d => d.data()); if (S.aba === 'escola') renderEscola(); }, () => {}));
+    nuvem.parar.push(Nuvem.membros(eid).onSnapshot(snap => { nuvem.membros = snap.docs.map(d => d.data()); if (S.aba === 'escola') renderEscola(); renderSeletorResponsavel(); }, () => {}));
   }
 }
 function renderTudo() {
@@ -608,7 +624,7 @@ function registrar(leitura, p, extra = {}) {
   }
   // Com o Nº lido, o id é fixo (prova_turma_Nº): o banco recusa uma segunda folha do mesmo aluno, mesmo de outro professor
   const id = leitura.num != null && !extra.exemplo ? `${S.atual}_${turmaId || 'sem-turma'}_${leitura.num}` : uid();
-  const r = { id, corretor: Nuvem.email(), corretorNome: Nuvem.nome(), turmaId, num: leitura.num, nome: extra.nome || '', exemplo: !!extra.exemplo,
+  const r = { id, corretor: Nuvem.email(), corretorNome: Nuvem.nome(), responsavel: p.responsavel || '', turmaId, num: leitura.num, nome: extra.nome || '', exemplo: !!extra.exemplo,
     resp: leitura.resp, duvidas: leitura.duvidas, quando: Date.now(), versao: p.versao };
   const base = document.createElement('canvas'); base.width = leitura.cv.width; base.height = leitura.cv.height;
   base.getContext('2d').drawImage(leitura.cv, 0, 0);
@@ -834,6 +850,7 @@ function renderConferirGabarito() {
 function renderGabarito() {
   const p = prova();
   $('#f-nome').value = p.nome; $('#f-n').value = p.n; $('#f-k').value = p.k; $('#f-valor').value = p.valor; $('#f-modelo').value = p.modelo || 'padrao';
+  renderSeletorResponsavel();
   $('#gab-grid').innerHTML = p.gab.map((g, q) => `
     <div class="gq ${p.anul[q] ? 'is-anul' : ''}">
       <span class="qn">${String(q + 1).padStart(2, '0')}</span>
@@ -960,7 +977,7 @@ function filtrados() {
 function renderResultados() {
   renderSeletoresTurma();
   const p = prova(), rs = filtrados(), t = turmaPorId(S.turmaFiltro);
-  $('#res-lead').textContent = `${p.nome}${t ? ' · ' + t.nome : ''} · ${rs.length} ${rs.length === 1 ? 'folha corrigida' : 'folhas corrigidas'}${ehCoord() ? '' : ' por você'}.`;
+  $('#res-lead').textContent = `${p.nome}${t ? ' · ' + t.nome : ''} · ${rs.length} ${rs.length === 1 ? 'folha corrigida' : 'folhas corrigidas'}${ehCoord() || ehResponsavel(p) ? '' : ' por você'}.`;
   const corrigidos = new Set(rs.map(r => r.num));
   const faltam = t ? t.alunos.map((nome, i) => ({ nome, num: i + 1 })).filter(a => a.nome && !corrigidos.has(a.num)) : [];
   const faltamHTML = t && t.alunos.length ? `<div style="display:grid;gap:8px"><h3>${faltam.length ? `Faltam corrigir (${faltam.length})` : 'Todos os alunos da turma foram corrigidos'}</h3>${faltam.length ? `<div class="chips">${faltam.map(a => `<span class="chip">${String(a.num).padStart(2, '0')} · ${esc(a.nome)}</span>`).join('')}</div>` : ''}</div>` : '';
@@ -988,14 +1005,14 @@ function renderResultados() {
         <td class="num">${c.ac}/${p.n}</td>
         <td class="num">${fmt(c.nota)}</td>
         <td class="num">${!precisaRubrica(p, c) ? '<span class="muted">—</span>'
-          : ehCoord() || r.corretor === Nuvem.email()
+          : podeMexerResultado(r)
             ? `<label class="sr-only" for="rb-${r.id}">Rubrica de ${esc(nomeDe(r) || 'aluno')}</label><input type="number" class="rubrica" id="rb-${r.id}" data-rubrica="${r.id}" min="0" max="${RUBRICA_MAX}" step="0.5" value="${r.rubrica ?? ''}" placeholder="0">`
             : fmt(Number(r.rubrica) || 0)}</td>
         <td class="num">${(() => { const nf = notaFinal(p, r, c); return aprovado(p, nf)
           ? `<strong class="nota-final ok" title="Aprovado">${fmt(nf)}</strong>`
           : `<strong class="nota-final pend" title="Com pendência">${fmt(nf)}</strong> <span class="pend-txt">Pendência</span>`; })()}</td>
         <td>${c.br || c.mu ? `<span class="chip warn">${[c.br ? c.br + ' em branco' : '', c.mu ? c.mu + ' c/ 2 marcas' : ''].filter(Boolean).join(' · ')}</span>` : '<span class="chip">ok</span>'}</td>
-        <td>${ehCoord() || r.corretor === Nuvem.email() ? `<button class="btn small danger" data-remover-res="${r.id}" title="Remove esta correção para poder corrigir a prova de novo">Remover</button>` : ''}</td>
+        <td>${podeMexerResultado(r) ? `<button class="btn small danger" data-remover-res="${r.id}" title="Remove esta correção para poder corrigir a prova de novo">Remover</button>` : ''}</td>
       </tr>`).join('')}</tbody>
     </table></div>
     <div style="display:grid;gap:12px">
@@ -1007,7 +1024,7 @@ function renderResultados() {
 
 // Linhas da planilha de resultados (prova e turma escolhidas): uma linha por aluno, em ordem de turma e Nº
 function linhasPlanilha() {
-  const p = prova(), coord = ehCoord();
+  const p = prova(), coord = ehCoord() || ehResponsavel(p);
   const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota da prova', 'Rubrica', 'Nota final', 'Situação', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
   [...filtrados()].sort((a, b) => (turmaPorId(a.turmaId)?.nome || '').localeCompare(turmaPorId(b.turmaId)?.nome || '') || (a.num ?? 999) - (b.num ?? 999)).forEach(r => {
     const c = corrigir(p, r.resp);
@@ -1052,6 +1069,22 @@ $('#excluir').addEventListener('click', e => armar(e.currentTarget, 'Confirmar e
 $('#f-nome').addEventListener('input', e => { prova().nome = e.target.value; save(); renderProvas(); });
 $('#f-n').addEventListener('change', e => mudarEstrutura(+e.target.value, prova().k));
 $('#f-k').addEventListener('change', e => mudarEstrutura(prova().n, +e.target.value));
+// Professor responsável pela prova: vê todas as correções dela, mesmo as feitas por outra pessoa
+function renderSeletorResponsavel() {
+  const p = prova(), atual = p?.responsavel || '';
+  const pessoas = (nuvem.membros || []).map(m => m.email).sort();
+  if (atual && !pessoas.includes(atual)) pessoas.push(atual);
+  $('#f-resp').innerHTML = '<option value="">Nenhum</option>' + pessoas.map(e => `<option value="${esc(e)}">${esc(e)}</option>`).join('');
+  $('#f-resp').value = atual;
+}
+$('#f-resp').addEventListener('change', e => {
+  const p = prova(); if (!p || p.local) return;
+  p.responsavel = e.target.value;
+  // As correções que já existem passam a ser vistas pelo novo responsável
+  (S.res[p.id] || []).forEach(r => { if (!r.exemplo) r.responsavel = p.responsavel; });
+  save();
+  toast(p.responsavel ? `${p.responsavel} agora vê todas as correções desta prova.` : 'Prova sem professor responsável.');
+});
 $('#f-modelo').addEventListener('change', e => { const p = prova(); p.modelo = e.target.value; p.versao = (p.versao || 1) + 1; save(); toast(`Modelo da folha: ${MODELOS[p.modelo]}. Imprima a folha nova na etapa 3.`); });
 $('#f-valor').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) { prova().valor = v; save(); } else e.target.value = prova().valor; });
 $('#aplicar-cola').addEventListener('click', () => {

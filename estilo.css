@@ -206,7 +206,7 @@ details.importar > summary { cursor: pointer; font-weight: 700; color: var(--acc
 body[data-papel="professor"] .so-coord { display: none !important; }
 .quem-sou { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.85rem; min-width: 0; }
 .quem-sou > span { display: grid; line-height: 1.25; min-width: 0; }
-.quem-sou #eu-info { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.quem-sou #eu-info { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .membro-novo { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 .pill { font-size: 0.78rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--paper); color: var(--muted); }
 .pill.coord { background: var(--accent-weak); color: var(--accent); }

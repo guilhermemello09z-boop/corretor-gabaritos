@@ -55,7 +55,6 @@ const limpo = o => JSON.parse(JSON.stringify(o));
 const todosResultados = () => Object.entries(S.res).flatMap(([provaId, lista]) => lista.filter(r => !r.exemplo).map(r => ({ ...r, provaId })));
 const vistas = { provas: () => S.provas.filter(p => !p.local), turmas: () => S.turmas, resultados: todosResultados };
 // Pode alterar uma correção: o coordenador, quem corrigiu ou o professor responsável pela prova
-const ehResponsavel = p => !!p?.responsavel && p.responsavel === Nuvem.email();
 const podeMexerResultado = r => ehCoord() || r.corretor === Nuvem.email() || (!!r.responsavel && r.responsavel === Nuvem.email());
 const podeGravar = { provas: ehCoord, turmas: ehCoord, resultados: podeMexerResultado };
 
@@ -142,7 +141,8 @@ function ouvirEscola() {
   ouvir('provas', Nuvem.colecao(eid, 'provas'), itens => { S.provas = itens.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR', { numeric: true })); });
   ouvir('turmas', Nuvem.colecao(eid, 'turmas'), itens => { S.turmas = itens.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { numeric: true })); });
   const colRes = Nuvem.colecao(eid, 'resultados');
-  const qRes = ehCoord() ? colRes : [colRes.where('corretor', '==', Nuvem.email()), colRes.where('responsavel', '==', Nuvem.email())];
+  // Todos da escola veem todas as notas; alterar e remover continua restrito (veja podeMexerResultado)
+  const qRes = colRes;
   ouvir('resultados', qRes, itens => {
     const exemplos = Object.entries(S.res).flatMap(([provaId, l]) => l.filter(r => r.exemplo).map(r => ({ ...r, provaId })));
     S.res = {};
@@ -977,7 +977,7 @@ function filtrados() {
 function renderResultados() {
   renderSeletoresTurma();
   const p = prova(), rs = filtrados(), t = turmaPorId(S.turmaFiltro);
-  $('#res-lead').textContent = `${p.nome}${t ? ' · ' + t.nome : ''} · ${rs.length} ${rs.length === 1 ? 'folha corrigida' : 'folhas corrigidas'}${ehCoord() || ehResponsavel(p) ? '' : ' por você'}.`;
+  $('#res-lead').textContent = `${p.nome}${t ? ' · ' + t.nome : ''} · ${rs.length} ${rs.length === 1 ? 'folha corrigida' : 'folhas corrigidas'}.`;
   const corrigidos = new Set(rs.map(r => r.num));
   const faltam = t ? t.alunos.map((nome, i) => ({ nome, num: i + 1 })).filter(a => a.nome && !corrigidos.has(a.num)) : [];
   const faltamHTML = t && t.alunos.length ? `<div style="display:grid;gap:8px"><h3>${faltam.length ? `Faltam corrigir (${faltam.length})` : 'Todos os alunos da turma foram corrigidos'}</h3>${faltam.length ? `<div class="chips">${faltam.map(a => `<span class="chip">${String(a.num).padStart(2, '0')} · ${esc(a.nome)}</span>`).join('')}</div>` : ''}</div>` : '';
@@ -1024,7 +1024,7 @@ function renderResultados() {
 
 // Linhas da planilha de resultados (prova e turma escolhidas): uma linha por aluno, em ordem de turma e Nº
 function linhasPlanilha() {
-  const p = prova(), coord = ehCoord() || ehResponsavel(p);
+  const p = prova(), coord = true; // a coluna "Corrigido por" aparece para todos
   const linhas = [['Turma', 'Nº', 'Aluno', 'Acertos', 'Nota da prova', 'Rubrica', 'Nota final', 'Situação', ...(coord ? ['Corrigido por'] : []), ...Array.from({ length: p.n }, (_, i) => 'Q' + (i + 1))]];
   [...filtrados()].sort((a, b) => (turmaPorId(a.turmaId)?.nome || '').localeCompare(turmaPorId(b.turmaId)?.nome || '') || (a.num ?? 999) - (b.num ?? 999)).forEach(r => {
     const c = corrigir(p, r.resp);
